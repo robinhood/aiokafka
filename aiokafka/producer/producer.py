@@ -3,13 +3,13 @@ import logging
 import collections
 
 from rhkafka.partitioner.default import DefaultPartitioner
-from rhkafka.protocol.produce import ProduceRequest
 from rhkafka.codec import has_gzip, has_snappy, has_lz4
 
 import aiokafka.errors as Errors
 from aiokafka.client import AIOKafkaClient
 from aiokafka.errors import (
     MessageSizeTooLargeError, KafkaError, UnknownTopicOrPartitionError)
+from aiokafka.protocol.produce import ProduceRequest
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import TopicPartition
 from aiokafka.util import ensure_future
