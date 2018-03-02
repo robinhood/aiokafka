@@ -980,7 +980,7 @@ class Fetcher:
             if check_crcs and not next_batch.validate_crc():
                 # This iterator will be closed after the exception, so we don't
                 # try to drain other batches here. They will be refetched.
-                raise Errors.CorruptRecordException("Invalid CRC")
+                raise Errors.CorruptRecordException(f"Invalid CRC - {tp}")
             for record in next_batch:
                 # Save encoded sizes
                 key_size = len(record.key) if record.key is not None else -1
