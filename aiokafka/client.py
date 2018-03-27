@@ -255,6 +255,12 @@ class AIOKafkaClient:
                     node_id, err)
                 continue
 
+            # don't update the cluster if there are no valid nodes...the topic
+            # we want may still be in the process of being created which means
+            # we will get errors and no nodes until it exists
+            if not metadata.brokers:
+                return False
+
             cluster_metadata.update_metadata(metadata)
 
             # We only keep bootstrap connection to update metadata until
@@ -282,7 +288,7 @@ class AIOKafkaClient:
                 self._md_update_waiter.set_result(None)
             self._md_update_fut = create_future(loop=self._loop)
         # Metadata will be updated in the background by syncronizer
-        return self._md_update_fut
+        return asyncio.shield(self._md_update_fut, loop=self._loop)
 
     @asyncio.coroutine
     def fetch_all_metadata(self):
@@ -359,7 +365,8 @@ class AIOKafkaClient:
                     request_timeout_ms=self._request_timeout_ms,
                     ssl_context=self._ssl_context,
                     security_protocol=self._security_protocol,
-                    on_close=self._on_connection_closed)
+                    on_close=self._on_connection_closed,
+                    max_idle_ms=self._connections_max_idle_ms)
         except (OSError, asyncio.TimeoutError) as err:
             log.error('Unable connect to node with id %s: %s', node_id, err)
             # Connection failures imply that our metadata is stale, so let's
@@ -421,7 +428,7 @@ class AIOKafkaClient:
         """Attempt to guess the broker version"""
         if node_id is None:
             default_group_conns = [
-                node_id for (node_id, group) in self._conns.keys()
+                n_id for (n_id, group) in self._conns.keys()
                 if group == ConnectionGroup.DEFAULT
             ]
             if default_group_conns:
@@ -543,4 +550,5 @@ class AIOKafkaClient:
     @asyncio.coroutine
     def _maybe_wait_metadata(self):
         if self._md_update_fut is not None:
-            yield from self._md_update_fut
+            yield from asyncio.shield(
+                self._md_update_fut, loop=self._loop)

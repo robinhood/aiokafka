@@ -106,10 +106,23 @@ class AIOKafkaConnection:
         self._reader, self._writer, self._protocol = reader, writer, protocol
         # Start reader task.
         self._read_task = ensure_future(self._read(), loop=loop)
+        self._read_task.add_done_callback(self._on_read_task_error)
         # Start idle checker
         if self._max_idle_ms is not None:
             self._idle_handle = self._loop.call_soon(self._idle_check)
         return reader, writer
+
+    def _on_read_task_error(self, read_task):
+        try:
+            read_task.result()
+        except Exception as exc:
+            conn_exc = Errors.ConnectionError(
+                "Connection at {0}:{1} broken".format(self._host, self._port))
+            conn_exc.__cause__ = exc
+            conn_exc.__context__ = exc
+            for _, _, fut in self._requests:
+                fut.set_exception(conn_exc)
+            self.close(reason=CloseReason.CONNECTION_BROKEN)
 
     def _idle_check(self):
         idle_for = self._loop.time() - self._last_action
@@ -169,16 +182,17 @@ class AIOKafkaConnection:
         return bool(self._reader is not None and not self._reader.at_eof())
 
     def close(self, reason=None):
+        self.log.debug("Closing connection at %s:%s", self._host, self._port)
         if self._reader is not None:
             self._writer.close()
             self._writer = self._reader = None
             self._read_task.cancel()
             self._read_task = None
-            error = Errors.ConnectionError(
-                "Connection at {0}:{1} closed".format(
-                    self._host, self._port))
             for _, _, fut in self._requests:
                 if not fut.done():
+                    error = Errors.ConnectionError(
+                        "Connection at {0}:{1} closed".format(
+                            self._host, self._port))
                     fut.set_exception(error)
             self._requests = []
             if self._on_close_cb is not None:
@@ -229,11 +243,12 @@ class AIOKafkaConnection:
                 # Update idle timer.
                 self._last_action = self._loop.time()
         except (OSError, EOFError, ConnectionError) as exc:
-            conn_exc = Errors.ConnectionError(
-                "Connection at {0}:{1} broken".format(self._host, self._port))
-            conn_exc.__cause__ = exc
-            conn_exc.__context__ = exc
             for _, _, fut in self._requests:
+                conn_exc = Errors.ConnectionError(
+                    "Connection at {0}:{1} broken"
+                    .format(self._host, self._port))
+                conn_exc.__cause__ = exc
+                conn_exc.__context__ = exc
                 fut.set_exception(conn_exc)
             self.close(reason=CloseReason.CONNECTION_BROKEN)
         except asyncio.CancelledError:

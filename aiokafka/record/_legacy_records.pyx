@@ -21,7 +21,7 @@ cdef extern from "Python.h":
     object PyMemoryView_FromMemory(char *mem, ssize_t size, int flags)
 
 
-# This should be before _cutil to generate include for `winsock2.h` before 
+# This should be before _cutil to generate include for `winsock2.h` before
 # `windows.h`
 from aiokafka.record cimport _hton as hton
 from aiokafka.record cimport _cutil as cutil
