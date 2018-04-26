@@ -232,6 +232,8 @@ class GroupCoordinator(BaseCoordinator):
         def _on_coordination_done(fut):
             try:
                 fut.result()
+            except asyncio.CancelledError:
+                pass
             except Exception:  # pragma: no cover
                 log.error(
                     "Unexpected error in coordinator routine", exc_info=True)
