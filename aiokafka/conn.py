@@ -121,7 +121,8 @@ class AIOKafkaConnection:
             conn_exc.__cause__ = exc
             conn_exc.__context__ = exc
             for _, _, fut in self._requests:
-                fut.set_exception(conn_exc)
+                if not fut.done():
+                    fut.set_exception(conn_exc)
             self.close(reason=CloseReason.CONNECTION_BROKEN)
 
     def _idle_check(self):
@@ -244,12 +245,13 @@ class AIOKafkaConnection:
                 self._last_action = self._loop.time()
         except (OSError, EOFError, ConnectionError) as exc:
             for _, _, fut in self._requests:
-                conn_exc = Errors.ConnectionError(
-                    "Connection at {0}:{1} broken"
-                    .format(self._host, self._port))
-                conn_exc.__cause__ = exc
-                conn_exc.__context__ = exc
-                fut.set_exception(conn_exc)
+                if not fut.done():
+                    conn_exc = Errors.ConnectionError(
+                        "Connection at {0}:{1} broken"
+                        .format(self._host, self._port))
+                    conn_exc.__cause__ = exc
+                    conn_exc.__context__ = exc
+                    fut.set_exception(conn_exc)
             self.close(reason=CloseReason.CONNECTION_BROKEN)
         except asyncio.CancelledError:
             pass
