@@ -381,6 +381,7 @@ class AIOKafkaProducer(object):
                 yield from task
         except Exception:  # pragma: no cover
             log.error("Unexpected error in sender routine", exc_info=True)
+            yield from self.stop()
 
     @asyncio.coroutine
     def _send_produce_req(self, node_id, batches):
