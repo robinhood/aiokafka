@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import time
 from unittest import mock
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ from aiokafka.consumer import AIOKafkaConsumer
 from aiokafka.consumer.fetcher import RecordTooLargeError
 from aiokafka.producer import AIOKafkaProducer
 from aiokafka.client import AIOKafkaClient
-from aiokafka.util import ensure_future
+from aiokafka.util import ensure_future, PY_341
 from aiokafka.structs import (
     OffsetAndTimestamp, TopicPartition, OffsetAndMetadata
 )
@@ -100,6 +101,21 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         # will ignore, no exception expected
         yield from consumer.stop()
 
+    @pytest.mark.skipif(not PY_341, reason="Not supported on older Python's")
+    @run_until_complete
+    def test_consumer_warn_unclosed(self):
+        consumer = AIOKafkaConsumer(
+            loop=self.loop, group_id=None,
+            bootstrap_servers=self.hosts)
+        yield from consumer.start()
+
+        with self.silence_loop_exception_handler():
+            with self.assertWarnsRegex(
+                    ResourceWarning, "Unclosed AIOKafkaConsumer"):
+                del consumer
+                yield from asyncio.sleep(0, loop=self.loop)
+                gc.collect()
+
     @run_until_complete
     def test_get_by_partition(self):
         yield from self.send_messages(0, list(range(0, 100)))
@@ -117,8 +133,8 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
                 self.assertEqual(m.partition, tp.partition)
                 messages.append(m)
 
-        task1 = asyncio.async(task(p0, messages), loop=self.loop)
-        task2 = asyncio.async(task(p1, messages), loop=self.loop)
+        task1 = ensure_future(task(p0, messages), loop=self.loop)
+        task2 = ensure_future(task(p1, messages), loop=self.loop)
         yield from asyncio.wait([task1, task2], loop=self.loop)
         self.assert_message_count(messages, 200)
 
@@ -674,13 +690,13 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         self.assertEqual(msgs, [b"1", b"2", b"3"])
 
     def test_consumer_arguments(self):
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "`security_protocol` should be SSL or PLAINTEXT"):
             AIOKafkaConsumer(
                 self.topic, loop=self.loop,
                 bootstrap_servers=self.hosts,
                 security_protocol="SOME")
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "`ssl_context` is mandatory if "
                             "security_protocol=='SSL'"):
             AIOKafkaConsumer(
@@ -703,21 +719,21 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
             yield from consumer.commit("something")
         with self.assertRaises(ValueError):
             yield from consumer.commit({tp: (offset, "metadata", 100)})
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "Key should be TopicPartition instance"):
             yield from consumer.commit({"my_topic": offset_and_metadata})
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "Metadata should be a string"):
             yield from consumer.commit({tp: (offset, 1000)})
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "Metadata should be a string"):
             yield from consumer.commit({tp: (offset, b"\x00\x02")})
 
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 IllegalStateError, "Partition .* is not assigned"):
             yield from consumer.commit({TopicPartition(self.topic, 10): 1000})
         consumer.unsubscribe()
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 IllegalStateError, "Not subscribed to any topics"):
             yield from consumer.commit({tp: 1000})
 
@@ -729,7 +745,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         self.add_cleanup(consumer.stop)
 
         consumer.subscribe(topics=set([self.topic]))
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 IllegalStateError, "No partitions assigned"):
             yield from consumer.commit({tp: 1000})
 
@@ -1460,3 +1476,17 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
             coordinator._exclude_internal_topics, exclude_internal_topics)
         self.assertEqual(
             coordinator._enable_auto_commit, enable_auto_commit)
+
+    @run_until_complete
+    def test_consumer_fast_unsubscribe(self):
+        # Unsubscribe before coordination finishes
+        consumer = AIOKafkaConsumer(
+            loop=self.loop, group_id="test_consumer_fast_unsubscribe",
+            bootstrap_servers=self.hosts)
+        tp = TopicPartition(self.topic, 0)
+
+        yield from consumer.start()
+        consumer.subscribe([tp])
+        yield from asyncio.sleep(0.01, loop=self.loop)
+        consumer.unsubscribe()
+        yield from consumer.stop()

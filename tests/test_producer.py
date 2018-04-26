@@ -1,7 +1,9 @@
-import json
 import asyncio
+import gc
+import json
 import pytest
 import time
+import weakref
 from unittest import mock
 
 from kafka.cluster import ClusterMetadata
@@ -21,6 +23,7 @@ from aiokafka.producer import AIOKafkaProducer
 from aiokafka.client import AIOKafkaClient
 from aiokafka.consumer import AIOKafkaConsumer
 from aiokafka.errors import ProducerClosed
+from aiokafka.util import PY_341
 
 LOG_APPEND_TIME = 1
 
@@ -45,6 +48,25 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
         self.assertEqual(partitions, set([0, 1]))
         yield from producer.stop()
         self.assertEqual(producer._closed, True)
+
+    @pytest.mark.skipif(not PY_341, reason="Not supported on older Python's")
+    @run_until_complete
+    def test_producer_warn_unclosed(self):
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        producer_ref = weakref.ref(producer)
+        yield from producer.start()
+
+        with self.silence_loop_exception_handler():
+            with self.assertWarnsRegex(
+                    ResourceWarning, "Unclosed AIOKafkaProducer"):
+                del producer
+                # _sender_routine will contain a reference and will only be
+                # freed after loop will spin once. Not sure why dou...
+                yield from asyncio.sleep(0, loop=self.loop)
+                gc.collect()
+                # Assure that the reference was properly collected
+                self.assertIsNone(producer_ref())
 
     @run_until_complete
     def test_producer_notopic(self):
@@ -330,13 +352,13 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
         yield from consumer.stop()
 
     def test_producer_arguments(self):
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "`security_protocol` should be SSL or PLAINTEXT"):
             AIOKafkaProducer(
                 loop=self.loop,
                 bootstrap_servers=self.hosts,
                 security_protocol="SOME")
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "`ssl_context` is mandatory if "
                             "security_protocol=='SSL'"):
             AIOKafkaProducer(
@@ -349,6 +371,7 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts)
         yield from producer.start()
+        self.add_cleanup(producer.stop)
 
         fut1 = yield from producer.send("producer_flush_test", b'text1')
         fut2 = yield from producer.send("producer_flush_test", b'text2')
@@ -365,6 +388,7 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts)
         yield from producer.start()
+        self.add_cleanup(producer.stop)
 
         send_time = (time.time() * 1000)
         res = yield from producer.send_and_wait(
@@ -393,3 +417,23 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
                 "XXXX", b'text1', partition=0)
             self.assertEqual(res.timestamp_type, LOG_APPEND_TIME)
             self.assertEqual(res.timestamp, expected_timestamp)
+
+    @run_until_complete
+    def test_producer_send_empty_batch(self):
+        # We trigger a unique case here, we don't send any messages, but the
+        # ProduceBatch will be created. It should be discarded as it contains
+        # 0 messages by sender routine.
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        yield from producer.start()
+        self.add_cleanup(producer.stop)
+
+        with self.assertRaises(TypeError):
+            yield from producer.send(self.topic, 'text1')
+
+        send_mock = mock.Mock()
+        send_mock.side_effect = producer._send_produce_req
+        producer._send_produce_req = send_mock
+
+        yield from producer.flush()
+        self.assertEqual(send_mock.call_count, 0)

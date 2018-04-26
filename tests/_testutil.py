@@ -120,20 +120,30 @@ class KafkaIntegrationTestCase(unittest.TestCase):
         cls.hosts = ['{}:{}'.format(cls.kafka_host, cls.kafka_port)]
 
         # Reconnecting until Kafka in docker becomes available
-        client = AIOKafkaClient(loop=cls.loop, bootstrap_servers=cls.hosts)
         for i in range(500):
+            client = AIOKafkaClient(loop=cls.loop, bootstrap_servers=cls.hosts)
             try:
                 cls.loop.run_until_complete(client.bootstrap())
-                # Wait for broker to look for others.
-                if not client.cluster.brokers():
-                    time.sleep(0.1)
-                    continue
+                # Broker can still be loading cluster layout, so we can get 0
+                # brokers. That counts as still not available
+                if client.cluster.brokers():
+                    return
             except ConnectionError:
-                time.sleep(0.1)
-            else:
+                pass
+            finally:
                 cls.loop.run_until_complete(client.close())
-                return
+            time.sleep(0.1)
         assert False, "Kafka server never started"
+
+    @contextmanager
+    def silence_loop_exception_handler(self):
+        if hasattr(self.loop, "get_exception_handler"):
+            orig_handler = self.loop.get_exception_handler()
+        else:
+            orig_handler = None  # Will set default handler
+        self.loop.set_exception_handler(lambda loop, ctx: None)
+        yield
+        self.loop.set_exception_handler(orig_handler)
 
     def setUp(self):
         super().setUp()
@@ -196,10 +206,10 @@ class KafkaIntegrationTestCase(unittest.TestCase):
 
     def assert_message_count(self, messages, num_messages):
         # Make sure we got them all
-        self.assertEquals(len(messages), num_messages)
+        self.assertEqual(len(messages), num_messages)
 
         # Make sure there are no duplicates
-        self.assertEquals(len(set(messages)), num_messages)
+        self.assertEqual(len(set(messages)), num_messages)
 
     def create_ssl_context(self):
         return create_ssl_context(
