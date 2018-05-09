@@ -671,7 +671,8 @@ class GroupCoordinator(BaseCoordinator):
             log.warning(
                 "Heartbeat failed for group %s because it is rebalancing",
                 self.group_id)
-            self.request_rejoin()
+            # self.request_rejoin() # XXX probably already rebalancing [vineet]
+            pass  # XXX probably already rebalancing [vineet]
             # it is valid to continue heartbeating while the group is
             # rebalancing. This ensures that the coordinator keeps the
             # member in the group for as long as the duration of the
