@@ -379,6 +379,7 @@ class Fetcher:
             pass
         except Exception:  # pragma: no cover
             log.error("Unexpected error in fetcher routine", exc_info=True)
+            yield from self.close()
 
     def _get_actions_per_node(self, assignment):
         """ For each assigned partition determine the action needed to be
