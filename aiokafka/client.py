@@ -384,7 +384,8 @@ class AIOKafkaClient:
         return True
 
     @asyncio.coroutine
-    def send(self, node_id, request, *, group=ConnectionGroup.DEFAULT):
+    def send(self, node_id, request, *, group=ConnectionGroup.DEFAULT,
+             verbose_logging=False):
         """Send a request to a specific node.
 
         Arguments:
@@ -400,10 +401,16 @@ class AIOKafkaClient:
         Returns:
             Future: resolves to Response struct
         """
+        if verbose_logging:
+            log.info(f'-Checking ready {node_id}')
         if not (yield from self.ready(node_id, group=group)):
+            if verbose_logging:
+                log.info(f'+Checked ready {node_id}')
             raise NodeNotReadyError(
                 "Attempt to send a request to node"
                 " which is not ready (node id {}).".format(node_id))
+        if verbose_logging:
+            log.info(f'+Checked ready {node_id}')
 
         # Every request gets a response, except one special case:
         expect_response = True
@@ -414,13 +421,19 @@ class AIOKafkaClient:
         future = self._conns[(node_id, group)].send(
             request, expect_response=expect_response)
         try:
+            if verbose_logging:
+                log.info(f'-Waiting result: {node_id}')
             result = yield from future
         except asyncio.TimeoutError:
+            if verbose_logging:
+                log.info(f'-Waited result: {node_id}')
             # close connection so it is renewed in next request
             self._conns[(node_id, group)].close(
                 reason=CloseReason.CONNECTION_TIMEOUT)
             raise RequestTimedOutError()
         else:
+            if verbose_logging:
+                log.info(f'-Waited result: {node_id}')
             return result
 
     @asyncio.coroutine
