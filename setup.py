@@ -89,7 +89,7 @@ class ve_build_ext(build_ext):
             raise BuildFailed()
 
 
-install_requires = ['kafka-python==1.4.3']
+install_requires = ['robinhood-kafka-python==1.4.3']
 
 PY_VER = sys.version_info
 
@@ -135,10 +135,11 @@ classifiers = [
 
 
 args = dict(
-    name='aiokafka',
+    name='robinhood-aiokafka',
     version=read_version(),
     description=('Kafka integration with asyncio.'),
-    long_description='\n\n'.join((read('README.rst'), read('CHANGES.rst'))),
+    long_description=('This is a temporary fork of aiokafka '
+                      'maintained by Robinhood'),
     classifiers=classifiers,
     platforms=['POSIX'],
     author='Andrew Svetlov',
