@@ -24,6 +24,10 @@ log = logging.getLogger(__name__)
 UNKNOWN_OFFSET = -1
 
 
+class MissingAutoCreateTopic(Exception):
+    ...
+
+
 class BaseCoordinator(object):
 
     def __init__(self, client, subscription, *, loop,
@@ -213,18 +217,8 @@ class GroupCoordinator(BaseCoordinator):
         self._rejoin_needed_fut = create_future(loop=loop)
         self._coordinator_dead_fut = create_future(loop=loop)
 
-        self._coordination_task = ensure_future(
-            self._coordination_routine(), loop=loop)
+        self._coordination_task = None
 
-        def _on_coordination_done(fut):
-            try:
-                fut.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception:  # pragma: no cover
-                log.error(
-                    "Unexpected error in coordinator routine", exc_info=True)
-        self._coordination_task.add_done_callback(_on_coordination_done)
 
         # Will be started/stopped by coordination task
         self._heartbeat_task = None
@@ -240,6 +234,9 @@ class GroupCoordinator(BaseCoordinator):
 
         # Will be set on close
         self._closing = create_future(loop=loop)
+
+        self._coordination_task = ensure_future(
+            self._coordination_routine(), loop=loop)
 
     def _on_metadata_change(self):
         self.request_rejoin()
@@ -505,92 +502,99 @@ class GroupCoordinator(BaseCoordinator):
         assignment = None
         performed_join_prepare = False
         while not self._closing.done():
-            # Check if there was a change to subscription
-            if subscription is not None and not subscription.active:
-                # The subscription can change few times, so we can not rely on
-                # flags or topic lists. For example if user changes
-                # subscription from X to Y and back to X we still need to
-                # rejoin group.
-                self.request_rejoin()
-                subscription = self._subscription.subscription
-            if subscription is None:
-                yield from asyncio.wait(
-                    [self._subscription.wait_for_subscription(),
-                     self._closing],
-                    return_when=asyncio.FIRST_COMPLETED, loop=self._loop)
-                if self._closing.done():
-                    break
-                subscription = self._subscription.subscription
-            assert subscription is not None and subscription.active
-            auto_assigned = self._subscription.partitions_auto_assigned()
+            try:
+                # Check if there was a change to subscription
+                if subscription is not None and not subscription.active:
+                    # The subscription can change few times, so we can not rely on
+                    # flags or topic lists. For example if user changes
+                    # subscription from X to Y and back to X we still need to
+                    # rejoin group.
+                    self.request_rejoin()
+                    subscription = self._subscription.subscription
+                if subscription is None:
+                    yield from asyncio.wait(
+                        [self._subscription.wait_for_subscription(),
+                        self._closing],
+                        return_when=asyncio.FIRST_COMPLETED, loop=self._loop)
+                    if self._closing.done():
+                        break
+                    subscription = self._subscription.subscription
+                assert subscription is not None and subscription.active
+                auto_assigned = self._subscription.partitions_auto_assigned()
 
-            # Ensure active group
-            yield from self.ensure_coordinator_known()
-            if auto_assigned and self.need_rejoin(subscription):
-                # due to a race condition between the initial metadata
-                # fetch and the initial rebalance, we need to ensure that
-                # the metadata is fresh before joining initially. This
-                # ensures that we have matched the pattern against the
-                # cluster's topics at least once before joining.
-                # Also the rebalance can be issued by another node, that
-                # discovered a new topic, which is still unknown to this
-                # one.
-                if self._subscription.subscribed_pattern:
-                    yield from self._client.force_metadata_update()
-                    if not subscription.active:
+                # Ensure active group
+                yield from self.ensure_coordinator_known()
+                if auto_assigned and self.need_rejoin(subscription):
+                    # due to a race condition between the initial metadata
+                    # fetch and the initial rebalance, we need to ensure that
+                    # the metadata is fresh before joining initially. This
+                    # ensures that we have matched the pattern against the
+                    # cluster's topics at least once before joining.
+                    # Also the rebalance can be issued by another node, that
+                    # discovered a new topic, which is still unknown to this
+                    # one.
+                    if self._subscription.subscribed_pattern:
+                        yield from self._client.force_metadata_update()
+                        if not subscription.active:
+                            continue
+
+                    if not performed_join_prepare:
+                        # NOTE: We pass the previously used assignment here.
+                        yield from self._on_join_prepare(assignment)
+                        performed_join_prepare = True
+
+                    # NOTE: we did not stop heartbeat task before to keep the
+                    # member alive during the callback, as it can commit offsets.
+                    # See the ``RebalanceInProgressError`` case in heartbeat
+                    # handling.
+                    yield from self._stop_heartbeat_task()
+
+                    # We will only try to perform the rejoin once. If it fails,
+                    # we will spin this loop another time, checking for coordinator
+                    # and subscription changes.
+                    # NOTE: We do re-join in sync. The group rebalance will fail on
+                    # subscription change and coordinator failure by itself and
+                    # this way we don't need to worry about racing or cancellation
+                    # issues that could occur if re-join were to be a task.
+                    success = yield from self._do_rejoin_group(subscription)
+                    if success:
+                        performed_join_prepare = False
+                        assignment = subscription.assignment
+                        self._start_heartbeat_task()
+                    else:
+                        # Backoff is done in group rejoin
                         continue
-
-                if not performed_join_prepare:
-                    # NOTE: We pass the previously used assignment here.
-                    yield from self._on_join_prepare(assignment)
-                    performed_join_prepare = True
-
-                # NOTE: we did not stop heartbeat task before to keep the
-                # member alive during the callback, as it can commit offsets.
-                # See the ``RebalanceInProgressError`` case in heartbeat
-                # handling.
-                yield from self._stop_heartbeat_task()
-
-                # We will only try to perform the rejoin once. If it fails,
-                # we will spin this loop another time, checking for coordinator
-                # and subscription changes.
-                # NOTE: We do re-join in sync. The group rebalance will fail on
-                # subscription change and coordinator failure by itself and
-                # this way we don't need to worry about racing or cancellation
-                # issues that could occur if re-join were to be a task.
-                success = yield from self._do_rejoin_group(subscription)
-                if success:
-                    performed_join_prepare = False
-                    assignment = subscription.assignment
-                    self._start_heartbeat_task()
                 else:
-                    # Backoff is done in group rejoin
-                    continue
-            else:
-                assignment = subscription.assignment
+                    assignment = subscription.assignment
 
-            assert assignment is not None and assignment.active
+                assert assignment is not None and assignment.active
 
-            # We will only try to commit offsets once here. In error case the
-            # returned wait_timeout will be ``retry_backoff``. In success case
-            # time to next autocommit deadline. If autocommit is disabled
-            # timeout will be ``None``, ie. no timeout.
-            wait_timeout = yield from self._maybe_do_autocommit(assignment)
+                # We will only try to commit offsets once here. In error case the
+                # returned wait_timeout will be ``retry_backoff``. In success case
+                # time to next autocommit deadline. If autocommit is disabled
+                # timeout will be ``None``, ie. no timeout.
+                wait_timeout = yield from self._maybe_do_autocommit(assignment)
 
-            futures = [
-                self._closing,  # Will exit fast if close() called
-                self._coordinator_dead_fut,
-                subscription.unsubscribe_future]
-            # In case of manual assignment this future will be always set and
-            # we don't want a heavy loop here.
-            # NOTE: metadata changes are for partition count and pattern
-            # subscription, which is irrelevant in case of user assignment.
-            if auto_assigned:
-                futures.append(self._rejoin_needed_fut)
+                futures = [
+                    self._closing,  # Will exit fast if close() called
+                    self._coordinator_dead_fut,
+                    subscription.unsubscribe_future]
+                # In case of manual assignment this future will be always set and
+                # we don't want a heavy loop here.
+                # NOTE: metadata changes are for partition count and pattern
+                # subscription, which is irrelevant in case of user assignment.
+                if auto_assigned:
+                    futures.append(self._rejoin_needed_fut)
 
-            done, _ = yield from asyncio.wait(
-                futures, timeout=wait_timeout, loop=self._loop,
-                return_when=asyncio.FIRST_COMPLETED)
+                done, _ = yield from asyncio.wait(
+                    futures, timeout=wait_timeout, loop=self._loop,
+                    return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                pass
+            except MissingAutoCreateTopic as exc:
+                log.error("Rejoining group -- %s", exc)
+                yield from self._client.force_metadata_update()
+                self.request_rejoin()
 
         # Closing finallization
         if assignment is not None:
@@ -752,6 +756,10 @@ class GroupCoordinator(BaseCoordinator):
             subscription, self._assignors, self._session_timeout_ms,
             self._retry_backoff_ms, loop=self._loop)
         assignment = yield from rebalance.perform_group_join()
+        if self._client.cluster.missing_autocreate_topics:
+            raise MissingAutoCreateTopic(
+                "Need to rejoin! -- Topics not yet created: {0!r}".format(
+                    self._client.cluster.missing_autocreate_topics))
 
         if not subscription.active:
             log.debug("Subscription changed during rebalance from %s to %s. "
@@ -1154,6 +1162,7 @@ class CoordinatorGroupRebalance:
                 "Unexpected error in join group '%s' response: %s",
                 self.group_id, err)
             raise Errors.KafkaError(repr(err))
+
         return None
 
     @asyncio.coroutine
