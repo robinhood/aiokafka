@@ -154,7 +154,8 @@ class AIOKafkaProducer(object):
                  partitioner=DefaultPartitioner(), max_request_size=1048576,
                  linger_ms=0, send_backoff_ms=100,
                  retry_backoff_ms=100, security_protocol="PLAINTEXT",
-                 ssl_context=None, connections_max_idle_ms=540000):
+                 ssl_context=None, connections_max_idle_ms=540000,
+                 on_irrecoverable_error=None):
         if acks not in (0, 1, -1, 'all'):
             raise ValueError("Invalid ACKS parameter")
         if compression_type not in ('gzip', 'snappy', 'lz4', None):
@@ -185,6 +186,7 @@ class AIOKafkaProducer(object):
         self._partitioner = partitioner
         self._max_request_size = max_request_size
         self._request_timeout_ms = request_timeout_ms
+        self._on_irrecoverable_error = on_irrecoverable_error
 
         self.client = AIOKafkaClient(
             loop=loop, bootstrap_servers=bootstrap_servers,
@@ -379,8 +381,12 @@ class AIOKafkaProducer(object):
             # done tasks should never produce errors, if they are it's a bug
             for task in tasks:
                 yield from task
-        except Exception:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover
             log.error("Unexpected error in sender routine", exc_info=True)
+            if self._on_irrecoverable_error:
+                res = self._on_irrecoverable_error(exc)
+                if asyncio.iscoroutine(res):  # callback can be async def
+                    yield from res
             yield from self.stop()
 
     @asyncio.coroutine
