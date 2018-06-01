@@ -175,7 +175,8 @@ class AIOKafkaProducer(object):
                  retry_backoff_ms=100, security_protocol="PLAINTEXT",
                  ssl_context=None, connections_max_idle_ms=540000,
                  enable_idempotence=False, transactional_id=None,
-                 transaction_timeout_ms=60000):
+                 transaction_timeout_ms=60000,
+                 on_irrecoverable_error=None):
         if acks not in (0, 1, -1, 'all', _missing):
             raise ValueError("Invalid ACKS parameter")
         if compression_type not in ('gzip', 'snappy', 'lz4', None):
@@ -221,6 +222,7 @@ class AIOKafkaProducer(object):
         self._partitioner = partitioner
         self._max_request_size = max_request_size
         self._request_timeout_ms = request_timeout_ms
+        self._on_irrecoverable_error = on_irrecoverable_error
 
         self.client = AIOKafkaClient(
             loop=loop, bootstrap_servers=bootstrap_servers,
@@ -240,6 +242,7 @@ class AIOKafkaProducer(object):
             retry_backoff_ms=retry_backoff_ms, linger_ms=linger_ms,
             message_accumulator=self._message_accumulator,
             request_timeout_ms=request_timeout_ms,
+            on_irrecoverable_error=self._on_irrecoverable_error,
             loop=loop)
 
         self._loop = loop

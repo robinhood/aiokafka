@@ -32,7 +32,8 @@ class Sender:
 
     def __init__(
             self, client, *, acks, txn_manager, message_accumulator,
-            retry_backoff_ms, linger_ms, request_timeout_ms, loop):
+            retry_backoff_ms, linger_ms, request_timeout_ms,
+            on_irrecoverable_error, loop):
         self.client = client
         self._txn_manager = txn_manager
         self._acks = acks
@@ -46,6 +47,7 @@ class Sender:
         self._retry_backoff = retry_backoff_ms / 1000
         self._request_timeout_ms = request_timeout_ms
         self._linger_time = linger_ms / 1000
+        self._on_irrecoverable_error = on_irrecoverable_error
 
     @asyncio.coroutine
     def start(self):
@@ -161,6 +163,10 @@ class Sender:
             raise
         except Exception:  # pragma: no cover
             log.error("Unexpected error in sender routine", exc_info=True)
+            if self._on_irrecoverable_error:
+                res = self._on_irrecoverable_error(exc)
+                if asyncio.iscoroutine(res):  # callback can be async def
+                    yield from res
             raise KafkaError("Unexpected error during batch delivery")
 
     @asyncio.coroutine
