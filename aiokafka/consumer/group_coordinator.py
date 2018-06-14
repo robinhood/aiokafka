@@ -929,10 +929,7 @@ class GroupCoordinator(BaseCoordinator):
                     log.error(
                         "OffsetCommit failed for group %s due to group"
                         " error (%s), will rejoin", self.group_id, error)
-                    if error_type is Errors.RebalanceInProgressError:
-                        self.request_rejoin()
-                    else:
-                        self.reset_generation()
+                    self.reset_generation()
                     # need to re-join group
                     error = error_type(self.group_id)
                     log.error(
