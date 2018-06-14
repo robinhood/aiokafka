@@ -277,6 +277,10 @@ class GroupCoordinator(BaseCoordinator):
     def error_future(self):
         return self._coordination_task
 
+    def set_close(self):
+        if not self._closing.done():
+            self._closing.set_result(None)
+
     @asyncio.coroutine
     def close(self):
         """Close the coordinator, leave the current group
