@@ -415,6 +415,9 @@ class AIOKafkaConsumer(object):
         """
         return self._subscription.assigned_partitions()
 
+    def set_close(self):
+        self._closed = True
+
     @asyncio.coroutine
     def stop(self):
         """ Close the consumer, while waiting for finilizers:
@@ -425,7 +428,7 @@ class AIOKafkaConsumer(object):
         if self._closed:
             return
         log.debug("Closing the KafkaConsumer.")
-        self._closed = True
+        self.set_close()
         if self._coordinator:
             yield from self._coordinator.close()
         if self._fetcher:
