@@ -5,7 +5,7 @@ import sys
 from contextlib import contextmanager
 from unittest import mock
 
-from kafka.protocol.offset import OffsetResponse
+from rhkafka.protocol.offset import OffsetResponse
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 
 from aiokafka.consumer.fetch import (

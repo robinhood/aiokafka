@@ -2,11 +2,11 @@ import asyncio
 import logging
 import random
 
-from kafka.conn import collect_hosts
-from kafka.cluster import ClusterMetadata
-from kafka.protocol.metadata import MetadataRequest
-from kafka.protocol.produce import ProduceRequest
-from kafka.protocol.commit import OffsetFetchRequest
+from rhkafka.conn import collect_hosts
+from rhkafka.cluster import ClusterMetadata
+from rhkafka.protocol.metadata import MetadataRequest
+from rhkafka.protocol.produce import ProduceRequest
+from rhkafka.protocol.commit import OffsetFetchRequest
 
 import aiokafka.errors as Errors
 from aiokafka import __version__
@@ -393,10 +393,10 @@ class AIOKafkaClient:
             request (Struct): request object (not-encoded)
 
         Raises:
-            kafka.common.RequestTimedOutError
-            kafka.common.NodeNotReadyError
-            kafka.common.ConnectionError
-            kafka.common.CorrelationIdError
+            rhkafka.common.RequestTimedOutError
+            rhkafka.common.NodeNotReadyError
+            rhkafka.common.ConnectionError
+            rhkafka.common.CorrelationIdError
 
         Returns:
             Future: resolves to Response struct
@@ -450,11 +450,11 @@ class AIOKafkaClient:
                 assert self.cluster.brokers(), 'no brokers in metadata'
                 node_id = list(self.cluster.brokers())[0].nodeId
 
-        from kafka.protocol.admin import (
+        from rhkafka.protocol.admin import (
             ListGroupsRequest_v0, ApiVersionRequest_v0)
-        from kafka.protocol.commit import (
+        from rhkafka.protocol.commit import (
             OffsetFetchRequest_v0, GroupCoordinatorRequest_v0)
-        from kafka.protocol.metadata import MetadataRequest_v0
+        from rhkafka.protocol.metadata import MetadataRequest_v0
         test_cases = [
             ((0, 10), ApiVersionRequest_v0()),
             ((0, 9), ListGroupsRequest_v0()),

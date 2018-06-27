@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 
-from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
+from rhkafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
 
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.client import AIOKafkaClient

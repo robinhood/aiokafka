@@ -3,12 +3,12 @@ import unittest
 import pytest
 import struct
 from unittest import mock
-from kafka.protocol.produce import ProduceRequest_v0 as ProduceRequest
-from kafka.protocol.message import Message
-from kafka.protocol.metadata import (
+from rhkafka.protocol.produce import ProduceRequest_v0 as ProduceRequest
+from rhkafka.protocol.message import Message
+from rhkafka.protocol.metadata import (
     MetadataRequest_v0 as MetadataRequest,
     MetadataResponse_v0 as MetadataResponse)
-from kafka.protocol.commit import (
+from rhkafka.protocol.commit import (
     GroupCoordinatorRequest_v0 as GroupCoordinatorRequest,
     GroupCoordinatorResponse_v0 as GroupCoordinatorResponse)
 

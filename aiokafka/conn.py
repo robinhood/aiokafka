@@ -2,8 +2,8 @@ import asyncio
 import struct
 import logging
 
-from kafka.protocol.api import RequestHeader
-from kafka.protocol.commit import (
+from rhkafka.protocol.api import RequestHeader
+from rhkafka.protocol.commit import (
     GroupCoordinatorResponse_v0 as GroupCoordinatorResponse)
 
 import aiokafka.errors as Errors

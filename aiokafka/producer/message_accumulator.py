@@ -3,7 +3,7 @@ import collections
 import io
 import copy
 
-from kafka.protocol.types import Int32
+from rhkafka.protocol.types import Int32
 
 from aiokafka.errors import (KafkaTimeoutError,
                              NotLeaderForPartitionError,

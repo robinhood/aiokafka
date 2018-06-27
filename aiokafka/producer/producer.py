@@ -2,9 +2,9 @@ import asyncio
 import logging
 import collections
 
-from kafka.partitioner.default import DefaultPartitioner
-from kafka.protocol.produce import ProduceRequest
-from kafka.codec import has_gzip, has_snappy, has_lz4
+from rhkafka.partitioner.default import DefaultPartitioner
+from rhkafka.protocol.produce import ProduceRequest
+from rhkafka.codec import has_gzip, has_snappy, has_lz4
 
 import aiokafka.errors as Errors
 from aiokafka.client import AIOKafkaClient

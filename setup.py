@@ -73,7 +73,7 @@ class ve_build_ext(build_ext):
             raise BuildFailed()
 
 
-install_requires = ['robinhood-kafka-python==1.3.6']
+install_requires = ['robinhood-kafka-python==1.3.7']
 
 PY_VER = sys.version_info
 

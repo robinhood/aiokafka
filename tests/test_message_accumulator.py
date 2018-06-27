@@ -4,8 +4,8 @@ import pytest
 import unittest
 from unittest import mock
 
-from kafka.cluster import ClusterMetadata
-from kafka.common import (TopicPartition, KafkaTimeoutError,
+from rhkafka.cluster import ClusterMetadata
+from rhkafka.common import (TopicPartition, KafkaTimeoutError,
                           NotLeaderForPartitionError,
                           LeaderNotAvailableError)
 from ._testutil import run_until_complete

@@ -1,10 +1,5 @@
-import kafka
-from kafka.errors import *  # noqa
-from kafka.errors import KafkaError, InvalidMessageError
-if not hasattr(kafka, '__robinhood__'):
-    raise RuntimeError(
-        'Please install robinhood-kafka-python, not kafka-python')
-
+from rhkafka.errors import *  # noqa
+from rhkafka.errors import KafkaError, InvalidMessageError
 __all__ = [
     # kafka-python errors
     "KafkaError", "ConnectionError", "NodeNotReadyError",

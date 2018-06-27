@@ -4,7 +4,7 @@ import logging
 import random
 from itertools import chain
 
-from kafka.protocol.offset import OffsetRequest
+from rhkafka.protocol.offset import OffsetRequest
 
 from aiokafka.consumer.fetch import FetchRequest
 import aiokafka.errors as Errors

@@ -11,7 +11,7 @@ information.
     import asyncio
     from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
     from aiokafka.helpers import create_ssl_context
-    from kafka.common import TopicPartition
+    from rhkafka.common import TopicPartition
 
     context = create_ssl_context(
         cafile="./ca-cert",  # CA used to sign certificate.

@@ -5,12 +5,12 @@ import socket
 import types
 from unittest import mock
 
-from kafka.common import (KafkaError, ConnectionError, RequestTimedOutError,
+from rhkafka.common import (KafkaError, ConnectionError, RequestTimedOutError,
                           NodeNotReadyError, UnrecognizedBrokerVersion)
-from kafka.protocol.metadata import (
+from rhkafka.protocol.metadata import (
     MetadataRequest_v0 as MetadataRequest,
     MetadataResponse_v0 as MetadataResponse)
-from kafka.protocol.fetch import FetchRequest_v0
+from rhkafka.protocol.fetch import FetchRequest_v0
 
 from aiokafka.client import AIOKafkaClient, ConnectionGroup
 from aiokafka.conn import AIOKafkaConnection, CloseReason

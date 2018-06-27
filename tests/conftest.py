@@ -183,6 +183,7 @@ def setup_test_class_serverless(request, loop, ssl_folder):
 
 @pytest.fixture(scope='class')
 def setup_test_class(request, loop, kafka_server, ssl_folder):
+    print('SETTING LOOP')
     request.cls.loop = loop
     khost, kport, ksslport = kafka_server
     request.cls.kafka_host = khost

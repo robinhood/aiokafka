@@ -4,14 +4,14 @@ import pytest
 import time
 from unittest import mock
 
-from kafka.cluster import ClusterMetadata
-from kafka.common import (KafkaTimeoutError,
+from rhkafka.cluster import ClusterMetadata
+from rhkafka.common import (KafkaTimeoutError,
                           UnknownTopicOrPartitionError,
                           MessageSizeTooLargeError,
                           NotLeaderForPartitionError,
                           LeaderNotAvailableError,
                           RequestTimedOutError)
-from kafka.protocol.produce import ProduceResponse
+from rhkafka.protocol.produce import ProduceResponse
 
 from ._testutil import (
     KafkaIntegrationTestCase, run_until_complete, kafka_versions
