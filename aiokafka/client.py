@@ -78,6 +78,8 @@ class AIOKafkaClient:
             disable idle checks. Default: 540000 (9hours).
     """
 
+    _closed = False
+
     def __init__(self, *, loop, bootstrap_servers='localhost',
                  client_id='aiokafka-' + __version__,
                  metadata_max_age_ms=300000,
@@ -147,58 +149,62 @@ class AIOKafkaClient:
         if futs:
             yield from asyncio.gather(*futs, loop=self._loop)
 
+    def set_close(self):
+        self._closed = True
+
     @asyncio.coroutine
     def bootstrap(self):
         """Try to to bootstrap initial cluster metadata"""
         # using request v0 for bootstap (bcs api version is not detected yet)
         metadata_request = MetadataRequest[0]([])
-        for host, port, _ in self.hosts:
-            log.debug("Attempting to bootstrap via node at %s:%s", host, port)
+        while not self._closed:
+            for host, port, _ in self.hosts:
+                log.debug("Attempting to bootstrap via node at %s:%s", host, port)
 
-            try:
-                bootstrap_conn = yield from create_conn(
-                    host, port, loop=self._loop, client_id=self._client_id,
-                    request_timeout_ms=self._request_timeout_ms,
-                    ssl_context=self._ssl_context,
-                    security_protocol=self._security_protocol,
-                    max_idle_ms=self._connections_max_idle_ms)
-            except (OSError, asyncio.TimeoutError) as err:
-                log.error('Unable connect to "%s:%s": %s', host, port, err)
-                continue
+                try:
+                    bootstrap_conn = yield from create_conn(
+                        host, port, loop=self._loop, client_id=self._client_id,
+                        request_timeout_ms=self._request_timeout_ms,
+                        ssl_context=self._ssl_context,
+                        security_protocol=self._security_protocol,
+                        max_idle_ms=self._connections_max_idle_ms)
+                except (OSError, asyncio.TimeoutError) as err:
+                    log.error('Unable connect to "%s:%s": %s', host, port, err)
+                    continue
 
-            try:
-                metadata = yield from bootstrap_conn.send(metadata_request)
-            except KafkaError as err:
-                log.warning('Unable to request metadata from "%s:%s": %s',
-                            host, port, err)
-                bootstrap_conn.close()
-                continue
+                try:
+                    metadata = yield from bootstrap_conn.send(metadata_request)
+                except KafkaError as err:
+                    log.warning('Unable to request metadata from "%s:%s": %s',
+                                host, port, err)
+                    bootstrap_conn.close()
+                    continue
 
-            self.cluster.update_metadata(metadata)
+                self.cluster.update_metadata(metadata)
 
-            # A cluster with no topics can return no broker metadata...
-            # In that case, we should keep the bootstrap connection till
-            # we get a normal cluster layout.
-            if not len(self.cluster.brokers()):
-                bootstrap_id = ('bootstrap', ConnectionGroup.DEFAULT)
-                self._conns[bootstrap_id] = bootstrap_conn
+                # A cluster with no topics can return no broker metadata...
+                # In that case, we should keep the bootstrap connection till
+                # we get a normal cluster layout.
+                if not len(self.cluster.brokers()):
+                    bootstrap_id = ('bootstrap', ConnectionGroup.DEFAULT)
+                    self._conns[bootstrap_id] = bootstrap_conn
+                else:
+                    bootstrap_conn.close()
+
+                log.debug('Received cluster metadata: %s', self.cluster)
+                break
             else:
-                bootstrap_conn.close()
+                raise ConnectionError(
+                    'Unable to bootstrap from {}'.format(self.hosts))
 
-            log.debug('Received cluster metadata: %s', self.cluster)
-            break
-        else:
-            raise ConnectionError(
-                'Unable to bootstrap from {}'.format(self.hosts))
+            # detect api version if need
+            if self._api_version == 'auto':
+                self._api_version = yield from self.check_version()
 
-        # detect api version if need
-        if self._api_version == 'auto':
-            self._api_version = yield from self.check_version()
-
-        if self._sync_task is None:
-            # starting metadata synchronizer task
-            self._sync_task = ensure_future(
-                self._md_synchronizer(), loop=self._loop)
+            if self._sync_task is None:
+                # starting metadata synchronizer task
+                self._sync_task = ensure_future(
+                    self._md_synchronizer(), loop=self._loop)
 
     @asyncio.coroutine
     def _md_synchronizer(self):

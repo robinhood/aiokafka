@@ -286,6 +286,9 @@ class AIOKafkaConsumer(object):
         """
         assert self._fetcher is None, "Did you call `start` twice?"
         yield from self._client.bootstrap()
+        if self._closed:
+            raise ConsumerStoppedError()
+
         yield from self._wait_topics()
 
         if self._client.api_version < (0, 9):
@@ -417,6 +420,7 @@ class AIOKafkaConsumer(object):
 
     def set_close(self):
         self._closed = True
+        self.client.set_close()
 
     @asyncio.coroutine
     def stop(self):
