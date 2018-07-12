@@ -330,7 +330,7 @@ class AIOKafkaConsumer(object):
 
     def set_close(self):
         self._closed = True
-        self.client.set_close()
+        self._client.set_close()
 
     @asyncio.coroutine
     def stop(self):
