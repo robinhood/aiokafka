@@ -213,6 +213,8 @@ class AIOKafkaProducer(object):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
         yield from self.client.bootstrap()
+        if self._closed:
+            return 
 
         if self._compression_type == 'lz4':
             assert self.client.api_version >= (0, 8, 2), \
@@ -235,6 +237,7 @@ class AIOKafkaProducer(object):
         if self._closed:
             return
         self._closed = True
+        self.client.set_close()
 
         yield from self._message_accumulator.close()
 
