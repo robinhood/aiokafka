@@ -272,8 +272,10 @@ class AIOKafkaProducer(object):
     def start(self):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
+        print('BOOTSTRAP')
         yield from self.client.bootstrap()
         if self._closed:
+            print('IM CLOSED')
             return 
 
         if self._compression_type == 'lz4':

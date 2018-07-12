@@ -192,19 +192,19 @@ class AIOKafkaClient:
                     bootstrap_conn.close()
 
                 log.debug('Received cluster metadata: %s', self.cluster)
-                break
+                # detect api version if need
+                if self._api_version == 'auto':
+                    self._api_version = yield from self.check_version()
+
+                if self._sync_task is None:
+                    # starting metadata synchronizer task
+                    self._sync_task = ensure_future(
+                        self._md_synchronizer(), loop=self._loop)
+                    return
             else:
                 raise ConnectionError(
                     'Unable to bootstrap from {}'.format(self.hosts))
 
-            # detect api version if need
-            if self._api_version == 'auto':
-                self._api_version = yield from self.check_version()
-
-            if self._sync_task is None:
-                # starting metadata synchronizer task
-                self._sync_task = ensure_future(
-                    self._md_synchronizer(), loop=self._loop)
 
     @asyncio.coroutine
     def _md_synchronizer(self):
