@@ -18,7 +18,9 @@ __all__ = [
     "ProducerClosed"
 ]
 
-CorruptRecordException = InvalidMessageError
+
+class CorruptRecordException(InvalidMessageError):
+    pass
 
 
 class ConsumerStoppedError(Exception):
