@@ -1,5 +1,5 @@
 from rhkafka.errors import *  # noqa
-from rhkafka.errors import KafkaError, InvalidMessageError
+from rhkafka.errors import InvalidMessageError, KafkaError
 __all__ = [
     # kafka-python errors
     "KafkaError", "ConnectionError", "NodeNotReadyError",
@@ -15,7 +15,7 @@ __all__ = [
     "UnsupportedVersionError", "CorruptRecordException", "InvalidMessageError",
     # aiokafka custom errors
     "ConsumerStoppedError", "NoOffsetForPartitionError", "RecordTooLargeError",
-    "ProducerClosed"
+    "ProducerClosed",
 ]
 
 
