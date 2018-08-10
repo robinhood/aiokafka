@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import logging
+import sys
 
 from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
 from kafka.coordinator.protocol import ConsumerProtocol
@@ -601,6 +602,10 @@ class GroupCoordinator(BaseCoordinator):
                 log.error("Rejoining group -- %s", exc)
                 yield from self._client.force_metadata_update()
                 self.request_rejoin()
+            except Exception as exc:
+                log.error('CRASHING HARD: COORDINATION ROUTINE GOT %r',
+                          exc, exc_info=1)
+                sys.exit(126)
 
         # Closing finallization
         if assignment is not None:
