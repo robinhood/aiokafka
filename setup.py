@@ -77,15 +77,10 @@ install_requires = ['robinhood-kafka-python==1.3.8']
 
 PY_VER = sys.version_info
 
-if PY_VER >= (3, 5):
+if PY_VER >= (3, 6):
     pass
-elif PY_VER >= (3, 4):
-    install_requires.append('typing')
-elif PY_VER >= (3, 3):
-    install_requires.append('typing')
-    install_requires.append('asyncio')
 else:
-    raise RuntimeError("aiokafka doesn't suppport Python earlier than 3.3")
+    raise RuntimeError("aiokafka doesn't suppport Python earlier than 3.6")
 
 
 def read(f):
@@ -110,10 +105,8 @@ classifiers = [
     'License :: OSI Approved :: Apache Software License',
     'Intended Audience :: Developers',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.3',
-    'Programming Language :: Python :: 3.4',
-    'Programming Language :: Python :: 3.5',
     'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
     'Operating System :: OS Independent',
     'Topic :: System :: Networking',
     'Topic :: System :: Distributed Computing',

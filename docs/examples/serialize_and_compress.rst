@@ -22,19 +22,18 @@ Producer
     def serializer(value):
         return json.dumps(value).encode()
 
-    @asyncio.coroutine
-    def produce(loop):
+    async def produce(loop):
         producer = AIOKafkaProducer(
             loop=loop, bootstrap_servers='localhost:9092',
             value_serializer=serializer,
             compression_type="gzip")
 
-        yield from producer.start()
+        await producer.start()
         data = {"a": 123.4, "b": "some string"}
-        yield from producer.send('foobar', data)
+        await producer.send('foobar', data)
         data = [1,2,3,4]
-        yield from producer.send('foobar', data)
-        yield from producer.stop()
+        await producer.send('foobar', data)
+        await producer.stop()
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(produce(loop))

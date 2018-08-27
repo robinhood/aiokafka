@@ -8,7 +8,6 @@ from .producer import AIOKafkaProducer
 from .structs import (
     TopicPartition, ConsumerRecord, OffsetAndTimestamp, OffsetAndMetadata
 )
-from .util import PY_35, ensure_future
 
 __robinhood__ = True
 
@@ -24,5 +23,3 @@ __all__ = [
     "ConsumerRecord", "TopicPartition", "OffsetAndTimestamp",
     "OffsetAndMetadata"
 ]
-
-(PY_35, ensure_future, AIOKafkaClient)

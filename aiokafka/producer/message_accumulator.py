@@ -11,7 +11,6 @@ from aiokafka.errors import (KafkaTimeoutError,
                              ProducerClosed)
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import RecordMetadata
-from aiokafka.util import create_future
 
 
 class BatchBuilder:
@@ -100,12 +99,12 @@ class MessageBatch:
 
         # Waiters
         # Set when messages are delivered to Kafka based on ACK setting
-        self.future = create_future(loop)
+        self.future = loop.create_future()
         self._msg_futures = []
         # Set when sender takes this batch
-        self._drain_waiter = create_future(loop=loop)
+        self._drain_waiter = loop.create_future()
 
-    def append(self, key, value, timestamp_ms, _create_future=create_future):
+    def append(self, key, value, timestamp_ms):
         """Append message (key and value) to batch
 
         Returns:
@@ -118,7 +117,7 @@ class MessageBatch:
         if metadata is None:
             return None
 
-        future = _create_future(loop=self._loop)
+        future = self._loop.create_future()
         self._msg_futures.append((future, metadata))
         return future
 
@@ -207,27 +206,24 @@ class MessageAccumulator:
         self._compression_type = compression_type
         self._batch_ttl = batch_ttl
         self._loop = loop
-        self._wait_data_future = create_future(loop=loop)
+        self._wait_data_future = loop.create_future()
         self._closed = False
         self._api_version = (0, 9)
 
     def set_api_version(self, api_version):
         self._api_version = api_version
 
-    @asyncio.coroutine
-    def flush(self):
-        # NOTE: we copy to avoid mutation during `yield from` below
+    async def flush(self):
+        # NOTE: we copy to avoid mutation during `await` below
         for batches in list(self._batches.values()):
             for batch in list(batches):
-                yield from batch.wait_deliver()
+                await batch.wait_deliver()
 
-    @asyncio.coroutine
-    def close(self):
+    async def close(self):
         self._closed = True
-        yield from self.flush()
+        await self.flush()
 
-    @asyncio.coroutine
-    def add_message(self, tp, key, value, timeout, timestamp_ms=None):
+    async def add_message(self, tp, key, value, timeout, timestamp_ms=None):
         """ Add message to batch by topic-partition
         If batch is already full this method waits (`timeout` seconds maximum)
         until batch is drained by send task
@@ -252,7 +248,7 @@ class MessageAccumulator:
             # batch is full, can't append data atm,
             # waiting until batch per topic-partition is drained
             start = self._loop.time()
-            yield from batch.wait_drain(timeout)
+            await batch.wait_drain(timeout)
             timeout -= self._loop.time() - start
             if timeout <= 0:
                 raise KafkaTimeoutError()
@@ -303,7 +299,7 @@ class MessageAccumulator:
         # task
         if not self._wait_data_future.done():
             self._wait_data_future.set_result(None)
-        self._wait_data_future = create_future(loop=self._loop)
+        self._wait_data_future = self._loop.create_future()
 
         return nodes, unknown_leaders_exist
 
@@ -318,8 +314,7 @@ class MessageAccumulator:
             self._wait_data_future.set_result(None)
         return batch
 
-    @asyncio.coroutine
-    def add_batch(self, builder, tp, timeout):
+    async def add_batch(self, builder, tp, timeout):
         """Add BatchBuilder to queue by topic-partition.
 
         Arguments:
@@ -344,7 +339,7 @@ class MessageAccumulator:
         while timeout > 0:
             pending = self._batches.get(tp)
             if pending:
-                yield from pending[-1].wait_drain(timeout=timeout)
+                await pending[-1].wait_drain(timeout=timeout)
                 timeout -= self._loop.time() - start
             else:
                 batch = self._append_batch(builder, tp)

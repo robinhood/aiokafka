@@ -7,7 +7,6 @@ from typing import Set, Pattern, Dict
 from aiokafka.errors import IllegalStateError
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiokafka.abc import ConsumerRebalanceListener
-from aiokafka.util import create_future
 
 log = logging.getLogger(__name__)
 
@@ -229,7 +228,7 @@ class SubscriptionState:
         """ Wait for subscription change. This will always wait for next
         subscription.
         """
-        fut = create_future(loop=self._loop)
+        fut = self._loop.create_future()
         self._subscription_waiters.append(fut)
         return fut
 
@@ -237,7 +236,7 @@ class SubscriptionState:
         """ Wait for next assignment. Be careful, as this will always wait for
         next assignment, even if the current one is active.
         """
-        fut = create_future(loop=self._loop)
+        fut = self._loop.create_future()
         self._assignment_waiters.append(fut)
         return fut
 
@@ -257,7 +256,7 @@ class Subscription:
         self._topics = frozenset(topics)  # type: Set[str]
         self._assignment = None  # type: Assignment
         self._loop = loop  # type: ALoop
-        self.unsubscribe_future = create_future(loop)  # type: Future
+        self.unsubscribe_future = loop.create_future()  # type: Future
         self._reassignment_in_progress = True
 
     @property
@@ -304,7 +303,7 @@ class ManualSubscription(Subscription):
         self._topics = frozenset(topics)
         self._assignment = Assignment(user_assignment, loop=loop)
         self._loop = loop
-        self.unsubscribe_future = create_future(loop)
+        self.unsubscribe_future = loop.create_future()
 
     def _assign(
             self, topic_partitions: Set[TopicPartition]):  # pragma: no cover
@@ -337,7 +336,7 @@ class Assignment:
             self._tp_state[tp] = TopicPartitionState(self, loop=loop)
 
         self._loop = loop
-        self.unassign_future = create_future(loop)
+        self.unassign_future = loop.create_future()
         self.commit_refresh_needed = Event(loop=loop)
 
     @property
@@ -400,11 +399,11 @@ class TopicPartitionState(object):
     def __init__(self, assignment, *, loop):
         # Synchronized values
         self._committed = None  # Last committed position and metadata
-        self._committed_fut = create_future(loop=loop)
+        self._committed_fut = loop.create_future()
 
         self.highwater = None  # Last fetched highwater mark
         self._position = None  # The current position of the topic
-        self._position_fut = create_future(loop=loop)
+        self._position_fut = loop.create_future()
 
         # Will be set by `seek_to_beginning` or `seek_to_end` if called by user
         # or by Fetcher after confirming that current position is no longer
@@ -443,7 +442,7 @@ class TopicPartitionState(object):
         self._reset_strategy = strategy
         self._position = None
         if self._position_fut.done():
-            self._position_fut = create_future(loop=self._loop)
+            self._position_fut = self._loop.create_future()
         self._status = PartitionStatus.AWAITING_RESET
 
     # Committed manipulation
@@ -463,7 +462,7 @@ class TopicPartitionState(object):
         """
         self._committed = None
         if self._committed_fut.done():
-            self._committed_fut = create_future(loop=self._loop)
+            self._committed_fut = self._loop.create_future()
 
     def update_committed(self, offset_meta: OffsetAndMetadata):
         """ Called by Coordinator on successfull commit to update commit cache.

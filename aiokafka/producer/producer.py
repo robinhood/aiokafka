@@ -12,7 +12,6 @@ from aiokafka.errors import (
     MessageSizeTooLargeError, KafkaError, UnknownTopicOrPartitionError)
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import TopicPartition
-from aiokafka.util import ensure_future
 
 from .message_accumulator import MessageAccumulator
 
@@ -208,11 +207,10 @@ class AIOKafkaProducer(object):
         self._linger_time = linger_ms / 1000
         self._producer_magic = 0
 
-    @asyncio.coroutine
-    def start(self):
+    async def start(self):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
-        yield from self.client.bootstrap()
+        await self.client.bootstrap()
         if self._closed:
             return 
 
@@ -220,41 +218,37 @@ class AIOKafkaProducer(object):
             assert self.client.api_version >= (0, 8, 2), \
                 'LZ4 Requires >= Kafka 0.8.2 Brokers'
 
-        self._sender_task = ensure_future(
+        self._sender_task = asyncio.ensure_future(
             self._sender_routine(), loop=self._loop)
         self._message_accumulator.set_api_version(self.client.api_version)
         self._producer_magic = 0 if self.client.api_version < (0, 10) else 1
         log.debug("Kafka producer started")
 
-    @asyncio.coroutine
-    def flush(self):
+    async def flush(self):
         """Wait untill all batches are Delivered and futures resolved"""
-        yield from self._message_accumulator.flush()
+        await self._message_accumulator.flush()
 
-    @asyncio.coroutine
-    def stop(self):
+    async def stop(self):
         """Flush all pending data and close all connections to kafka cluster"""
         if self._closed:
             return
         self._closed = True
         self.client.set_close()
 
-        yield from self._message_accumulator.close()
+        await self._message_accumulator.close()
 
         if self._sender_task:
             self._sender_task.cancel()
-            yield from self._sender_task
+            await self._sender_task
 
-        yield from self.client.close()
+        await self.client.close()
         log.debug("The Kafka producer has closed.")
 
-    @asyncio.coroutine
-    def partitions_for(self, topic):
+    async def partitions_for(self, topic):
         """Returns set of all known partitions for the topic."""
-        return (yield from self.client._wait_on_metadata(topic))
+        return await self.client._wait_on_metadata(topic)
 
-    @asyncio.coroutine
-    def send(self, topic, value=None, key=None, partition=None,
+    async def send(self, topic, value=None, key=None, partition=None,
              timestamp_ms=None):
         """Publish a message to a topic.
 
@@ -300,7 +294,7 @@ class AIOKafkaProducer(object):
             'Need at least one: key or value'
 
         # first make sure the metadata for the topic is available
-        yield from self.client._wait_on_metadata(topic)
+        await self.client._wait_on_metadata(topic)
 
         key_bytes, value_bytes = self._serialize(topic, key, value)
         partition = self._partition(topic, partition, key, value,
@@ -309,21 +303,19 @@ class AIOKafkaProducer(object):
         tp = TopicPartition(topic, partition)
         log.debug("Sending (key=%s value=%s) to %s", key, value, tp)
 
-        fut = yield from self._message_accumulator.add_message(
+        fut = await self._message_accumulator.add_message(
             tp, key_bytes, value_bytes, self._request_timeout_ms / 1000,
             timestamp_ms=timestamp_ms)
         return fut
 
-    @asyncio.coroutine
-    def send_and_wait(self, topic, value=None, key=None, partition=None,
-                      timestamp_ms=None):
+    async def send_and_wait(self, topic, value=None, key=None, partition=None,
+                            timestamp_ms=None):
         """Publish a message to a topic and wait the result"""
-        future = yield from self.send(
+        future = await self.send(
             topic, value, key, partition, timestamp_ms)
-        return (yield from future)
+        return await future
 
-    @asyncio.coroutine
-    def _sender_routine(self):
+    async def _sender_routine(self):
         """ Background task, that sends pending batches to leader nodes for
         batch's partition. This incapsulates same logic as Java's `Sender`
         background thread. Because we use asyncio this is more event based
@@ -349,7 +341,7 @@ class AIOKafkaProducer(object):
 
                 # create produce task for every batch
                 for node_id, batches in batches.items():
-                    task = ensure_future(
+                    task = asyncio.ensure_future(
                         self._send_produce_req(node_id, batches),
                         loop=self._loop)
                     self._in_flight.add(node_id)
@@ -368,7 +360,7 @@ class AIOKafkaProducer(object):
                 # * At least one of produce task is finished
                 # * Data for new partition arrived
                 # * Metadata update if partition leader unknown
-                done, _ = yield from asyncio.wait(
+                done, _ = await asyncio.wait(
                     waiters,
                     return_when=asyncio.FIRST_COMPLETED,
                     loop=self._loop)
@@ -383,17 +375,16 @@ class AIOKafkaProducer(object):
         except asyncio.CancelledError:
             # done tasks should never produce errors, if they are it's a bug
             for task in tasks:
-                yield from task
+                await task
         except Exception as exc:  # pragma: no cover
             log.error("Unexpected error in sender routine", exc_info=True)
             if self._on_irrecoverable_error:
                 res = self._on_irrecoverable_error(exc)
                 if asyncio.iscoroutine(res):  # callback can be async def
-                    yield from res
-            yield from self.stop()
+                    await res
+            await self.stop()
 
-    @asyncio.coroutine
-    def _send_produce_req(self, node_id, batches):
+    async def _send_produce_req(self, node_id, batches):
         """ Create produce request to node
         If producer configured with `retries`>0 and produce response contain
         "failed" partitions produce request for this partition will try
@@ -425,7 +416,7 @@ class AIOKafkaProducer(object):
 
         reenqueue = []
         try:
-            response = yield from self.client.send(node_id, request)
+            response = await self.client.send(node_id, request)
         except KafkaError as err:
             log.warning(
                 "Got error produce response: %s", err)
@@ -473,19 +464,19 @@ class AIOKafkaProducer(object):
 
         if reenqueue:
             # Wait backoff before reequeue
-            yield from asyncio.sleep(self._retry_backoff, loop=self._loop)
+            await asyncio.sleep(self._retry_backoff, loop=self._loop)
 
             for batch in reenqueue:
                 self._message_accumulator.reenqueue(batch)
             # If some error started metadata refresh we have to wait before
             # trying again
-            yield from self.client._maybe_wait_metadata()
+            await self.client._maybe_wait_metadata()
 
         # if batches for node is processed in less than a linger seconds
         # then waiting for the remaining time
         sleep_time = self._linger_time - (self._loop.time() - t0)
         if sleep_time > 0:
-            yield from asyncio.sleep(sleep_time, loop=self._loop)
+            await asyncio.sleep(sleep_time, loop=self._loop)
 
         self._in_flight.remove(node_id)
 
@@ -546,8 +537,7 @@ class AIOKafkaProducer(object):
         """
         return self._message_accumulator.create_builder()
 
-    @asyncio.coroutine
-    def send_batch(self, batch, topic, *, partition):
+    async def send_batch(self, batch, topic, *, partition):
         """Submit a BatchBuilder for publication.
 
         Arguments:
@@ -562,6 +552,6 @@ class AIOKafkaProducer(object):
         partition = self._partition(topic, partition, None, None, None, None)
         tp = TopicPartition(topic, partition)
         log.debug("Sending batch to %s", tp)
-        future = yield from self._message_accumulator.add_batch(
+        future = await self._message_accumulator.add_batch(
             batch, tp, self._request_timeout_ms / 1000)
         return future

@@ -22,14 +22,13 @@ Producer:
         import asyncio
         from aiokafka import AIOKafkaProducer
 
-        @asyncio.coroutine
-        def produce(loop, value, partition):
+        async def produce(loop, value, partition):
             producer = AIOKafkaProducer(
                 loop=loop, bootstrap_servers='localhost:9092')
 
-            yield from producer.start()
-            yield from producer.send('some-topic', value, partition=partition)
-            yield from producer.stop()
+            await producer.start()
+            await producer.send('some-topic', value, partition=partition)
+            await producer.stop()
 
         if len(sys.argv) != 3:
             print("usage: producer.py <partition> <message>")

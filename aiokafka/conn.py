@@ -7,7 +7,6 @@ from rhkafka.protocol.commit import (
     GroupCoordinatorResponse_v0 as GroupCoordinatorResponse)
 
 import aiokafka.errors as Errors
-from aiokafka.util import ensure_future, create_future
 
 __all__ = ['AIOKafkaConnection', 'create_conn']
 
@@ -24,11 +23,10 @@ class CloseReason:
     SHUTDOWN = 4
 
 
-@asyncio.coroutine
-def create_conn(host, port, *, loop=None, client_id='aiokafka',
-                request_timeout_ms=40000, api_version=(0, 8, 2),
-                ssl_context=None, security_protocol="PLAINTEXT",
-                max_idle_ms=None, on_close=None):
+async def create_conn(host, port, *, loop=None, client_id='aiokafka',
+                      request_timeout_ms=40000, api_version=(0, 8, 2),
+                      ssl_context=None, security_protocol="PLAINTEXT",
+                      max_idle_ms=None, on_close=None):
     if loop is None:
         loop = asyncio.get_event_loop()
     conn = AIOKafkaConnection(
@@ -37,7 +35,7 @@ def create_conn(host, port, *, loop=None, client_id='aiokafka',
         api_version=api_version,
         ssl_context=ssl_context, security_protocol=security_protocol,
         max_idle_ms=max_idle_ms, on_close=on_close)
-    yield from conn.connect()
+    await conn.connect()
     return conn
 
 
@@ -85,10 +83,9 @@ class AIOKafkaConnection:
 
         self._on_close_cb = on_close
 
-    @asyncio.coroutine
-    def connect(self):
+    async def connect(self):
         loop = self._loop
-        self._closed_fut = create_future(loop=loop)
+        self._closed_fut = loop.create_future()
         if self._secutity_protocol == "PLAINTEXT":
             ssl = None
         else:
@@ -98,14 +95,14 @@ class AIOKafkaConnection:
         # Create streams same as `open_connection`, but using custom protocol
         reader = asyncio.StreamReader(limit=READER_LIMIT, loop=loop)
         protocol = AIOKafkaProtocol(self._closed_fut, reader, loop=loop)
-        transport, _ = yield from asyncio.wait_for(
+        transport, _ = await asyncio.wait_for(
             loop.create_connection(
                 lambda: protocol, self.host, self.port, ssl=ssl),
             loop=loop, timeout=self._request_timeout)
         writer = asyncio.StreamWriter(transport, protocol, reader, loop)
         self._reader, self._writer, self._protocol = reader, writer, protocol
         # Start reader task.
-        self._read_task = ensure_future(self._read(), loop=loop)
+        self._read_task = asyncio.ensure_future(self._read(), loop=loop)
         self._read_task.add_done_callback(self._on_read_task_error)
         # Start idle checker
         if self._max_idle_ms is not None:
@@ -175,7 +172,7 @@ class AIOKafkaConnection:
 
         if not expect_response:
             return self._writer.drain()
-        fut = create_future(loop=self._loop)
+        fut = self._loop.create_future()
         self._requests.append((correlation_id, request.RESPONSE_TYPE, fut))
         return asyncio.wait_for(fut, self._request_timeout, loop=self._loop)
 
@@ -206,14 +203,13 @@ class AIOKafkaConnection:
         # a future in case we need to wait on it.
         return self._closed_fut
 
-    @asyncio.coroutine
-    def _read(self):
+    async def _read(self):
         try:
             while True:
-                resp = yield from self._reader.readexactly(4)
+                resp = await self._reader.readexactly(4)
                 size, = self.HEADER.unpack(resp)
 
-                resp = yield from self._reader.readexactly(size)
+                resp = await self._reader.readexactly(size)
 
                 recv_correlation_id, = self.HEADER.unpack(resp[:4])
 
