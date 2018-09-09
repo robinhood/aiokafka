@@ -17,7 +17,7 @@ from aiokafka.structs import (
 from aiokafka.errors import (
     IllegalStateError, OffsetOutOfRangeError, UnsupportedVersionError,
     KafkaTimeoutError, NoOffsetForPartitionError, ConsumerStoppedError,
-    IllegalOperation
+    IllegalOperation, UnknownError, KafkaError, InvalidSessionTimeoutError
 )
 
 from ._testutil import (
@@ -1474,3 +1474,131 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         yield from asyncio.sleep(0.01, loop=self.loop)
         consumer.unsubscribe()
         yield from consumer.stop()
+
+    @run_until_complete
+    def test_consumer_manual_assignment_with_group(self):
+        # Following issue #394 we seemed to mix subscription with manual
+        # assignment. The main test above probably missed this scenario cause
+        # it was initialized for subscription.
+        yield from self.send_messages(0, list(range(0, 10)))
+
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id='group-%s' % self.id(), bootstrap_servers=self.hosts)
+        tp = TopicPartition(self.topic, 0)
+        consumer.assign([tp])
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        for i in range(5):
+            msg = yield from consumer.getone()
+            self.assertEqual(msg.value, str(i).encode())
+
+        yield from consumer.commit()
+        yield from consumer.stop()
+
+        # Start the next consumer after closing this one. It should have
+        # committed the offset to the group
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id='group-%s' % self.id(), bootstrap_servers=self.hosts)
+        tp = TopicPartition(self.topic, 0)
+        consumer.assign([tp])
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        for i in range(5, 10):
+            msg = yield from consumer.getone()
+            self.assertEqual(msg.value, str(i).encode())
+
+    @run_until_complete
+    def test_consumer_manual_assignment_no_group_before_start(self):
+        # Following issue #394 we seemed to mix subscription with manual
+        # assignment. The main test above probably missed this scenario cause
+        # it was initialized for subscription.
+        yield from self.send_messages(0, list(range(0, 10)))
+
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id=None, bootstrap_servers=self.hosts)
+        tp = TopicPartition(self.topic, 0)
+        consumer.assign([tp])
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        for i in range(10):
+            msg = yield from consumer.getone()
+            self.assertEqual(msg.value, str(i).encode())
+
+    @run_until_complete
+    def test_consumer_manual_assignment_no_group_after_start(self):
+        # Following issue #394 we seemed to mix subscription with manual
+        # assignment. The main test above probably missed this scenario cause
+        # it was initialized for subscription.
+        yield from self.send_messages(0, list(range(0, 10)))
+
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id=None, bootstrap_servers=self.hosts)
+        tp = TopicPartition(self.topic, 0)
+        yield from consumer.start()
+        consumer.assign([tp])
+        self.add_cleanup(consumer.stop)
+
+        for i in range(10):
+            msg = yield from consumer.getone()
+            self.assertEqual(msg.value, str(i).encode())
+
+    @run_until_complete
+    def test_consumer_propagates_coordinator_errors(self):
+        # Following issue #344 it seems more critical. There may be
+        # more cases, where aiokafka just does not handle correctly in
+        # coordination (like ConnectionError in said issue).
+        # Original issue #294
+        yield from self.send_messages(0, list(range(0, 10)))
+
+        consumer = yield from self.consumer_factory()
+
+        msg = yield from consumer.getone()
+        self.assertEqual(msg.value, b"0")
+        return
+        with self.assertRaises(KafkaError):
+            with mock.patch.object(consumer._coordinator, "_send_req"):
+                @asyncio.coroutine
+                def mock_send_req(request):
+                    raise UnknownError()
+
+                msg = yield from consumer.getone()
+
+    @run_until_complete
+    def test_consumer_invalid_session_timeout(self):
+        # Following issue #344 it seems more critical. There may be
+        # more cases, where aiokafka just does not handle correctly in
+        # coordination (like ConnectionError is said issue).
+        # Original issue #294
+        yield from self.send_messages(0, list(range(0, 10)))
+
+        consumer = AIOKafkaConsumer(
+            self.topic,
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id="group-" + self.id(), bootstrap_servers=self.hosts,
+            session_timeout_ms=200, heartbeat_interval_ms=100)
+        with self.assertRaises(InvalidSessionTimeoutError):
+            yield from consumer.start()
+
+            # We still need proper cleanup if this succeeds
+            self.add_cleanup(consumer.stop)
+
+        # In case of success it will need to raise error again on stop
+        with self.assertRaises(InvalidSessionTimeoutError):
+            yield from consumer.stop()

@@ -122,6 +122,10 @@ class NoGroupCoordinator(BaseCoordinator):
     def close(self):
         pass
 
+    @property
+    def error_future(self):
+        return None
+
 
 class GroupCoordinator(BaseCoordinator):
     """
@@ -264,6 +268,10 @@ class GroupCoordinator(BaseCoordinator):
     def set_close(self):
         if not self._closing.done():
             self._closing.set_result(None)
+
+    @property
+    def error_future(self):
+        return asyncio.shield(self._coordination_task)
 
     @asyncio.coroutine
     def close(self):
