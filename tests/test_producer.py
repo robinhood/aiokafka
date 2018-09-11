@@ -48,6 +48,52 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
         self.assertEqual(producer._closed, True)
 
     @run_until_complete
+    def test_producer_api_version(self):
+        for text_version, api_version in [
+                ("auto", (0, 9, 0)),
+                ("0.9.1", (0, 9, 1)),
+                ("0.10.0", (0, 10, 0)),
+                ("0.11", (0, 11, 0)),
+                ("0.12.1", (0, 12, 1)),
+                ("1.0.2", (1, 0, 2))]:
+            producer = AIOKafkaProducer(
+                loop=self.loop, bootstrap_servers=self.hosts,
+                api_version=text_version)
+            self.assertEqual(producer.client.api_version, api_version)
+            yield from producer.stop()
+
+        # invalid cases
+        for version in ["0", "1", "0.10.0.1"]:
+            with self.assertRaises(ValueError):
+                AIOKafkaProducer(
+                    loop=self.loop, bootstrap_servers=self.hosts,
+                    api_version=version)
+        for version in [(0, 9), (0, 9, 1)]:
+            with self.assertRaises(TypeError):
+                AIOKafkaProducer(
+                    loop=self.loop, bootstrap_servers=self.hosts,
+                    api_version=version)
+
+    @pytest.mark.skipif(not PY_341, reason="Not supported on older Python's")
+    @run_until_complete
+    def test_producer_warn_unclosed(self):
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        producer_ref = weakref.ref(producer)
+        yield from producer.start()
+
+        with self.silence_loop_exception_handler():
+            with self.assertWarnsRegex(
+                    ResourceWarning, "Unclosed AIOKafkaProducer"):
+                del producer
+                # _sender_routine will contain a reference and will only be
+                # freed after loop will spin once. Not sure why dou...
+                yield from asyncio.sleep(0, loop=self.loop)
+                gc.collect()
+                # Assure that the reference was properly collected
+                self.assertIsNone(producer_ref())
+
+    @run_until_complete
     def test_producer_notopic(self):
         producer = AIOKafkaProducer(
             loop=self.loop, request_timeout_ms=200,

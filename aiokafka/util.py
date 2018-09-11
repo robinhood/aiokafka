@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+from distutils.version import StrictVersion
 
 __all__ = ["ensure_future", "create_future", "PY_35"]
 
@@ -18,6 +19,11 @@ def create_future(loop):
         return asyncio.Future(loop=loop)
 
 
+def parse_kafka_version(api_version):
+    return StrictVersion(api_version).version
+
+
+PY_341 = sys.version_info >= (3, 4, 1)
 PY_35 = sys.version_info >= (3, 5)
 PY_352 = sys.version_info >= (3, 5, 2)
 NO_EXTENSIONS = bool(os.environ.get('AIOKAFKA_NO_EXTENSIONS'))

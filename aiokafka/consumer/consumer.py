@@ -171,6 +171,7 @@ class AIOKafkaConsumer(object):
                  connections_max_idle_ms=540000):
         if api_version not in ('auto', '0.9', '0.10'):
             raise ValueError("Unsupported Kafka API version")
+
         self._client = AIOKafkaClient(
             loop=loop, bootstrap_servers=bootstrap_servers,
             client_id=client_id, metadata_max_age_ms=metadata_max_age_ms,

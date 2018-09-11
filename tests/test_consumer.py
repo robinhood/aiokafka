@@ -101,6 +101,49 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         yield from consumer.stop()
 
     @run_until_complete
+    def test_consumer_api_version(self):
+        yield from self.send_messages(0, list(range(0, 10)))
+        for text_version, api_version in [
+                ("auto", (0, 9, 0)),
+                ("0.9.1", (0, 9, 1)),
+                ("0.10.0", (0, 10, 0)),
+                ("0.11", (0, 11, 0)),
+                ("0.12.1", (0, 12, 1)),
+                ("1.0.2", (1, 0, 2))]:
+            consumer = AIOKafkaConsumer(
+                loop=self.loop, bootstrap_servers=self.hosts,
+                api_version=text_version)
+            self.assertEqual(consumer._client.api_version, api_version)
+            yield from consumer.stop()
+
+        # invalid cases
+        for version in ["0", "1", "0.10.0.1"]:
+            with self.assertRaises(ValueError):
+                AIOKafkaConsumer(
+                    loop=self.loop, bootstrap_servers=self.hosts,
+                    api_version=version)
+        for version in [(0, 9), (0, 9, 1)]:
+            with self.assertRaises(TypeError):
+                AIOKafkaConsumer(
+                    loop=self.loop, bootstrap_servers=self.hosts,
+                    api_version=version)
+
+    @pytest.mark.skipif(not PY_341, reason="Not supported on older Python's")
+    @run_until_complete
+    def test_consumer_warn_unclosed(self):
+        consumer = AIOKafkaConsumer(
+            loop=self.loop, group_id=None,
+            bootstrap_servers=self.hosts)
+        yield from consumer.start()
+
+        with self.silence_loop_exception_handler():
+            with self.assertWarnsRegex(
+                    ResourceWarning, "Unclosed AIOKafkaConsumer"):
+                del consumer
+                yield from asyncio.sleep(0, loop=self.loop)
+                gc.collect()
+
+    @run_until_complete
     def test_get_by_partition(self):
         yield from self.send_messages(0, list(range(0, 100)))
         yield from self.send_messages(1, list(range(100, 200)))
