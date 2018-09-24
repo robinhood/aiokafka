@@ -274,11 +274,17 @@ class AIOKafkaProducer(object):
         self._closed = True
         self.client.set_close()
 
-        yield from self._message_accumulator.close()
+        # If the sender task is down there is no way for accumulator to flush
+        if self._sender_task is not None:
+            yield from asyncio.wait([
+                self._message_accumulator.close(),
+                self._sender_task],
+                return_when=asyncio.FIRST_COMPLETED,
+                loop=self._loop)
 
-        if self._sender_task:
-            self._sender_task.cancel()
-            yield from self._sender_task
+            if not self._sender_task.done():
+                self._sender_task.cancel()
+                yield from self._sender_task
 
         yield from self.client.close()
         log.debug("The Kafka producer has closed.")
@@ -344,9 +350,11 @@ class AIOKafkaProducer(object):
         tp = TopicPartition(topic, partition)
         log.debug("Sending (key=%s value=%s) to %s", key, value, tp)
 
-        fut = yield from self._message_accumulator.add_message(
-            tp, key_bytes, value_bytes, self._request_timeout_ms / 1000,
-            timestamp_ms=timestamp_ms)
+        fut = yield from self._wait_for_reponse_or_error(
+            self._message_accumulator.add_message(
+                tp, key_bytes, value_bytes, self._request_timeout_ms / 1000,
+                timestamp_ms=timestamp_ms)
+        )
         return fut
 
     @asyncio.coroutine
@@ -355,7 +363,7 @@ class AIOKafkaProducer(object):
         """Publish a message to a topic and wait the result"""
         future = yield from self.send(
             topic, value, key, partition, timestamp_ms)
-        return (yield from future)
+        return (yield from self._wait_for_reponse_or_error(future))
 
     @asyncio.coroutine
     def _sender_routine(self):
@@ -656,6 +664,23 @@ class AIOKafkaProducer(object):
 
         tp = TopicPartition(topic, partition)
         log.debug("Sending batch to %s", tp)
-        future = yield from self._message_accumulator.add_batch(
-            batch, tp, self._request_timeout_ms / 1000)
+        future = yield from self._wait_for_reponse_or_error(
+            self._message_accumulator.add_batch(
+                batch, tp, self._request_timeout_ms / 1000)
+        )
         return future
+
+    @asyncio.coroutine
+    def _wait_for_reponse_or_error(self, coro):
+        routine_task = self._sender_task
+        data_task = ensure_future(coro, loop=self._loop)
+        yield from asyncio.wait(
+            [data_task, routine_task],
+            return_when=asyncio.FIRST_COMPLETED,
+            loop=self._loop)
+
+        # Check for errors in sender and raise if any
+        if routine_task.done():
+            routine_task.result()  # Raises set exception if any
+
+        return (yield from data_task)
