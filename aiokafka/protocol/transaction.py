@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 
-from kafka.protocol.api import Request, Response
-from kafka.protocol.types import (
+from rhkafka.protocol.api import Request, Response
+from rhkafka.protocol.types import (
     Int16, Int32, Int64, Schema, String
 )
 
