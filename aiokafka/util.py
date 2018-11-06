@@ -26,6 +26,7 @@ def parse_kafka_version(api_version):
 PY_341 = sys.version_info >= (3, 4, 1)
 PY_35 = sys.version_info >= (3, 5)
 PY_352 = sys.version_info >= (3, 5, 2)
+PY_36 = sys.version_info >= (3, 6)
 NO_EXTENSIONS = bool(os.environ.get('AIOKAFKA_NO_EXTENSIONS'))
 
 INTEGER_MAX_VALUE = 2 ** 31 - 1
