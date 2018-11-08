@@ -724,11 +724,14 @@ class AIOKafkaConsumer(object):
                 raise IllegalStateError(
                     "Partitions {} are not assigned".format(not_assigned))
 
+        committed_offsets = {}
         for tp in partitions:
             offset = yield from self.committed(tp)
+            committed_offsets[tp] = offset
             log.debug("Seeking to committed of partition %s %s", tp, offset)
             if offset and offset > 0:
                 self._fetcher.seek_to(tp, offset)
+        return committed_offsets
 
     @asyncio.coroutine
     def offsets_for_times(self, timestamps):
