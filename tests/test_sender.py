@@ -33,7 +33,7 @@ from aiokafka.errors import (
     RequestTimedOutError, DuplicateSequenceNumber
 )
 
-from kafka.protocol.metadata import MetadataRequest
+from rhkafka.protocol.metadata import MetadataRequest
 
 
 LOG_APPEND_TIME = 1

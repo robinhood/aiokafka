@@ -23,7 +23,7 @@ Consumer:
 
     import json
     import asyncio
-    from kafka.common import KafkaError
+    from rhkafka.common import KafkaError
     from aiokafka import AIOKafkaConsumer
 
     loop = asyncio.get_event_loop()

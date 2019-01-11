@@ -3,7 +3,7 @@ import pytest
 import unittest
 from unittest import mock
 
-from kafka.protocol.offset import OffsetResponse
+from rhkafka.protocol.offset import OffsetResponse
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 
 from aiokafka.protocol.fetch import (

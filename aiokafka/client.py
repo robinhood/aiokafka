@@ -2,9 +2,9 @@ import asyncio
 import logging
 import random
 
-from kafka.conn import collect_hosts
-from kafka.protocol.metadata import MetadataRequest
-from kafka.protocol.commit import OffsetFetchRequest
+from rhkafka.conn import collect_hosts
+from rhkafka.protocol.metadata import MetadataRequest
+from rhkafka.protocol.commit import OffsetFetchRequest
 
 import aiokafka.errors as Errors
 from aiokafka import __version__
@@ -466,11 +466,11 @@ class AIOKafkaClient:
                 assert self.cluster.brokers(), 'no brokers in metadata'
                 node_id = list(self.cluster.brokers())[0].nodeId
 
-        from kafka.protocol.admin import (
+        from rhkafka.protocol.admin import (
             ListGroupsRequest_v0, ApiVersionRequest_v0)
-        from kafka.protocol.commit import (
+        from rhkafka.protocol.commit import (
             OffsetFetchRequest_v0, GroupCoordinatorRequest_v0)
-        from kafka.protocol.metadata import MetadataRequest_v0
+        from rhkafka.protocol.metadata import MetadataRequest_v0
         test_cases = [
             ((0, 10), ApiVersionRequest_v0()),
             ((0, 9), ListGroupsRequest_v0()),

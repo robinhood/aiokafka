@@ -5,7 +5,9 @@ import sys
 import traceback
 import warnings
 
-from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
+from rhkafka.coordinator.assignors.roundrobin import (
+    RoundRobinPartitionAssignor,
+)
 
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.client import AIOKafkaClient

@@ -1,4 +1,4 @@
-from kafka.cluster import ClusterMetadata as BaseClusterMetadata
+from rhkafka.cluster import ClusterMetadata as BaseClusterMetadata
 from aiokafka.structs import BrokerMetadata
 
 

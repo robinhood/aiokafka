@@ -1,5 +1,5 @@
 import collections
-from kafka.common import OffsetAndMetadata, TopicPartition, BrokerMetadata
+from rhkafka.common import OffsetAndMetadata, TopicPartition, BrokerMetadata
 
 __all__ = [
     "OffsetAndMetadata", "TopicPartition", "RecordMetadata", "ConsumerRecord",

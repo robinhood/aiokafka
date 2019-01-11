@@ -4,10 +4,10 @@ import pytest
 import struct
 import unittest
 from unittest import mock
-from kafka.protocol.metadata import (
+from rhkafka.protocol.metadata import (
     MetadataRequest_v0 as MetadataRequest,
     MetadataResponse_v0 as MetadataResponse)
-from kafka.protocol.commit import (
+from rhkafka.protocol.commit import (
     GroupCoordinatorRequest_v0 as GroupCoordinatorRequest,
     GroupCoordinatorResponse_v0 as GroupCoordinatorResponse)
 

@@ -3,12 +3,12 @@ import collections
 import logging
 import sys
 
-from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
-from kafka.coordinator.protocol import ConsumerProtocol
-from kafka.protocol.commit import (
+from rhkafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
+from rhkafka.coordinator.protocol import ConsumerProtocol
+from rhkafka.protocol.commit import (
     OffsetCommitRequest_v2 as OffsetCommitRequest,
     OffsetFetchRequest_v1 as OffsetFetchRequest)
-from kafka.protocol.group import (
+from rhkafka.protocol.group import (
     HeartbeatRequest_v0 as HeartbeatRequest,
     JoinGroupRequest_v0 as JoinGroupRequest,
     LeaveGroupRequest_v0 as LeaveGroupRequest,

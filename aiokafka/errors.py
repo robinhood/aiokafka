@@ -1,8 +1,8 @@
 import inspect
 import sys
 
-from kafka.errors import *  # noqa
-from kafka.errors import (
+from rhkafka.errors import *  # noqa
+from rhkafka.errors import (
     KafkaError, InvalidMessageError, BrokerResponseError,
     GroupCoordinatorNotAvailableError, NotCoordinatorForGroupError,
     GroupLoadInProgressError, UnknownError
