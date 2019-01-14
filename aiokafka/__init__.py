@@ -11,6 +11,9 @@ from .structs import (
 from .util import PY_35, ensure_future
 
 
+__robinhood__ = True
+
+
 __all__ = [
     # Clients API
     "AIOKafkaProducer",
