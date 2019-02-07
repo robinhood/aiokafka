@@ -4,7 +4,7 @@ from .abc import ConsumerRebalanceListener
 from .client import AIOKafkaClient
 from .consumer import AIOKafkaConsumer
 from .errors import ConsumerStoppedError, IllegalOperation
-from .producer import AIOKafkaProducer
+from .producer import AIOKafkaProducer, BaseProducer, MultiTXNProducer
 from .structs import (
     TopicPartition, ConsumerRecord, OffsetAndTimestamp, OffsetAndMetadata
 )
