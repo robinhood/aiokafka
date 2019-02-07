@@ -870,14 +870,19 @@ class MultiTXNProducer(BaseProducer):
         )
 
     @asyncio.coroutine
-    def maybe_abort_transaction(self, transactional_id):
-        txn_manager = self._transactions[transactional_id]
-        if txn_manager.is_in_transaction():
-            txn_manager.aborting_transaction()
-            yield from self._wait_for_reponse_or_error(
-                txn_manager.wait_for_transaction_end(),
-                shield=True,
-            )
+    def stop_transaction(self, transactional_id):
+        txn_manager = self._transactions.pop(transactional_id, None)
+        accumulator = self._accumulators.pop(transactional_id, None)
+        sender = self._senders.pop(transactional_id, None)
+        if txn_manager is not None:
+            if txn_manager.is_in_transaction():
+                txn_manager.aborting_transaction()
+                yield from self._wait_for_reponse_or_error(
+                    txn_manager.wait_for_transaction_end(),
+                    shield=True,
+                )
+        yield from accumulator.flush()
+        yield from self._wait_for_sender1(sender, accumulator)
 
     @asyncio.coroutine
     def maybe_begin_transaction(self, transactional_id):
