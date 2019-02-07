@@ -164,8 +164,8 @@ class TransactionManager:
     def offsets_to_commit(self):
         if self._txn_consumer_group is None:
             return
-        for group_id, offsets, _ in self._pending_txn_offsets:
-            return offsets, group_id
+        for group_id, offsets, fut in self._pending_txn_offsets:
+            return offsets, group_id, fut
 
     def partition_added(self, tp: TopicPartition):
         self._pending_txn_partitions.remove(tp)

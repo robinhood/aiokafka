@@ -90,7 +90,9 @@ class Sender:
             while True:
                 # If indempotence or transactions are turned on we need to
                 # have a valid PID to send any request below
+                log.debug('+maybe wait for pid')
                 yield from self._maybe_wait_for_pid()
+                log.debug('-maybe wait for pid')
 
                 waiters = set()
                 # As transaction coordination is done via a single, separate
@@ -105,8 +107,10 @@ class Sender:
                     if txn_task is None or txn_task.done():
                         txn_task = self._maybe_do_transactional_request()
                         if txn_task is not None:
+                            log.debug('has txn task')
                             tasks.add(txn_task)
                         else:
+                            log.debug('creating new txn task')
                             # Waiters will not be awaited on exit, tasks will
                             waiters.add(txn_manager.make_task_waiter())
                     # We can't have a race condition between
@@ -143,10 +147,15 @@ class Sender:
                 # * At least one of produce task is finished
                 # * Data for new partition arrived
                 # * Metadata update if partition leader unknown
-                done, _ = yield from asyncio.wait(
-                    waiters,
-                    return_when=asyncio.FIRST_COMPLETED,
-                    loop=self._loop)
+                log.debug('+SENDER WAIT FOR %r' % (waiters,))
+                if waiters:
+                    done, _ = yield from asyncio.wait(
+                        waiters,
+                        return_when=asyncio.FIRST_COMPLETED,
+                        loop=self._loop)
+                    log.debug('-SENDER WAIT FOR')
+                else:
+                    yield from asyncio.sleep(0.5)
 
                 # done tasks should never produce errors, if they are it's a
                 # bug
@@ -291,9 +300,9 @@ class Sender:
         # Now commit the added group's offset
         commit_data = txn_manager.offsets_to_commit()
         if commit_data is not None:
-            offsets, group_id = commit_data
+            offsets, group_id, fut = commit_data
             return ensure_future(
-                self._do_txn_offset_commit(offsets, group_id),
+                self._do_txn_offset_commit(offsets, group_id, fut),
                 loop=self._loop)
 
         commit_result = txn_manager.needs_transaction_commit()
@@ -319,7 +328,7 @@ class Sender:
         return (yield from handler.do(node_id))
 
     @asyncio.coroutine
-    def _do_txn_offset_commit(self, offsets, group_id):
+    def _do_txn_offset_commit(self, offsets, group_id, fut):
         # Fast return if nothing to commit
         if not offsets:
             return
@@ -330,7 +339,7 @@ class Sender:
             "Sending offset-commit request with %s for group %s to %s",
             offsets, group_id, node_id
         )
-        handler = TxnOffsetCommitHandler(self, offsets, group_id)
+        handler = TxnOffsetCommitHandler(self, offsets, group_id, fut)
         return (yield from handler.do(node_id))
 
     @asyncio.coroutine
@@ -526,8 +535,12 @@ class AddOffsetsToTxnHandler(BaseHandler):
             # We will just retry after backoff
             pass
         elif error_type is InvalidProducerEpoch:
+            log.error("Producer for transactional id %r fenced",
+                      txn_manager.transactional_id)
             raise ProducerFenced()
         elif error_type is InvalidTxnState:
+            log.error("Producer invalid transaction state tid=%r: %r",
+                      txn_manager.transactional_id, resp.error_code)
             raise error_type()
         else:
             log.error(
@@ -541,10 +554,11 @@ class AddOffsetsToTxnHandler(BaseHandler):
 class TxnOffsetCommitHandler(BaseHandler):
     group = ConnectionGroup.COORDINATION
 
-    def __init__(self, sender, offsets, group_id):
+    def __init__(self, sender, offsets, group_id, fut):
         super().__init__(sender)
         self._offsets = offsets
         self._group_id = group_id
+        self._fut = fut
 
     def create_request(self):
         txn_manager = self._sender._txn_manager
@@ -569,34 +583,38 @@ class TxnOffsetCommitHandler(BaseHandler):
         txn_manager = self._sender._txn_manager
         group_id = self._group_id
 
-        for topic, partitions in resp.errors:
-            for partition, error_code in partitions:
-                tp = TopicPartition(topic, partition)
-                error_type = Errors.for_code(error_code)
+        try:
+            for topic, partitions in resp.errors:
+                for partition, error_code in partitions:
+                    tp = TopicPartition(topic, partition)
+                    error_type = Errors.for_code(error_code)
 
-                if error_type is Errors.NoError:
-                    offset = self._offsets[tp].offset
-                    log.debug(
-                        "Offset %s for partition %s committed to group %s",
-                        offset, tp, group_id)
-                    txn_manager.offset_committed(tp, offset, group_id)
-                elif (error_type is CoordinatorNotAvailableError or
-                        error_type is NotCoordinatorError or
-                        # Copied from Java. Not sure why it's only in this case
-                        error_type is RequestTimedOutError):
-                    self._sender._coordinator_dead(CoordinationType.GROUP)
-                    return self._default_backoff
-                elif (error_type is CoordinatorLoadInProgressError or
-                        error_type is UnknownTopicOrPartitionError):
-                    # We will just retry after backoff
-                    return self._default_backoff
-                elif error_type is InvalidProducerEpoch:
-                    raise ProducerFenced()
-                else:
-                    log.error(
-                        "Could not commit offset for partition %s due to "
-                        "unexpected error: %s", partition, error_type)
-                    raise error_type()
+                    if error_type is Errors.NoError:
+                        offset = self._offsets[tp].offset
+                        log.debug(
+                            "Offset %s for partition %s committed to group %s",
+                            offset, tp, group_id)
+                        txn_manager.offset_committed(tp, offset, group_id)
+                    elif (error_type is CoordinatorNotAvailableError or
+                            error_type is NotCoordinatorError or
+                            # Copied from Java. Not sure why it's only in this case
+                            error_type is RequestTimedOutError):
+                        self._sender._coordinator_dead(CoordinationType.GROUP)
+                        return self._default_backoff
+                    elif (error_type is CoordinatorLoadInProgressError or
+                            error_type is UnknownTopicOrPartitionError):
+                        # We will just retry after backoff
+                        return self._default_backoff
+                    elif error_type is InvalidProducerEpoch:
+                        raise ProducerFenced()
+                    else:
+                        log.error(
+                            "Could not commit offset for partition %s due to "
+                            "unexpected error: %s", partition, error_type)
+                        raise error_type()
+        except BaseException as exc:
+            self._fut.set_exception(exc)
+            raise
 
 
 class EndTxnHandler(BaseHandler):
