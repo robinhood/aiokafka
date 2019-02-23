@@ -3,7 +3,6 @@ import contextlib
 import copy
 from asyncio import AbstractEventLoop as ALoop, shield, Event, Future
 from enum import Enum
-import copy
 
 from typing import Set, Pattern, Dict, List
 
@@ -46,6 +45,10 @@ class SubscriptionState:
         self._subscription_waiters = []  # type: List[Future]
         self._assignment_waiters = []  # type: List[Future]
         self._loop = loop  # type: ALoop
+
+        # Fetch contexts
+        self._fetch_count = 0
+        self._last_fetch_ended = loop.time()
 
     @property
     def subscription(self) -> "Subscription":
@@ -269,6 +272,7 @@ class SubscriptionState:
                 waiter.set_exception(copy.copy(exc))
 
     # Pause/Resume API
+
     def pause(self, tp: TopicPartition) -> None:
         self._assigned_state(tp).pause()
 
@@ -281,6 +285,24 @@ class SubscriptionState:
 
     def resume(self, tp: TopicPartition) -> None:
         self._assigned_state(tp).resume()
+
+    # Fetch context
+
+    @contextlib.contextmanager
+    def fetch_context(self):
+        self._fetch_count += 1
+        yield
+        self._fetch_count -= 1
+        if self._fetch_count == 0:
+            self._last_fetch_ended = self._loop.time()
+
+    @property
+    def fetcher_idle_time(self):
+        """ How much time (in seconds) spent without consuming any records """
+        if self._fetch_count == 0:
+            return self._loop.time() - self._last_fetch_ended
+        else:
+            return 0
 
 
 class Subscription:
@@ -413,13 +435,6 @@ class Assignment:
                 requesting.append(tp)
         return requesting
 
-    @property
-    def assignment_idle_time(self):
-        """ How much time (in seconds) spent without consuming any records """
-        last_consumed_time = max(
-            state._last_consumed_ts for state in self._tp_state.values())
-        return self._loop.time() - last_consumed_time
-
 
 class PartitionStatus(Enum):
 
@@ -462,8 +477,6 @@ class TopicPartitionState(object):
 
         self._paused = False
         self._resume_fut = None
-
-        self._last_consumed_ts = loop.time()
 
     @property
     def paused(self):
@@ -523,7 +536,6 @@ class TopicPartitionState(object):
         """
         assert self._status == PartitionStatus.CONSUMING
         self._position = position
-        self._last_consumed_ts = self._loop.time()
 
     def reset_to(self, position: int):
         """ Called by Fetcher after performing a reset to force position to
