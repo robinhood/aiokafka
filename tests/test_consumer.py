@@ -744,7 +744,24 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
                 self.topic, loop=self.loop,
                 bootstrap_servers=self.hosts,
                 isolation_level="READ_CCC")
+            self.add_cleanup(consumer.stop)
             yield from consumer.start()
+        with self.assertRaisesRegex(
+                ValueError,
+                "sasl_plain_username and sasl_plain_password required for "
+                "PLAIN sasl"):
+            consumer = AIOKafkaConsumer(
+                self.topic, loop=self.loop,
+                bootstrap_servers=self.hosts,
+                security_protocol="SASL_PLAINTEXT")
+        with self.assertRaisesRegex(
+                ValueError,
+                "only `PLAIN` sasl_mechanism is supported at the moment"):
+            consumer = AIOKafkaConsumer(
+                self.topic, loop=self.loop,
+                bootstrap_servers=self.hosts,
+                security_protocol="SASL_PLAINTEXT",
+                sasl_mechanism="GSSAPI")
 
     @run_until_complete
     def test_consumer_commit_validation(self):
@@ -1614,39 +1631,6 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
             self.assertEqual(msg.value, str(i).encode())
 
     @run_until_complete
-    def test_consumer_propagates_coordinator_errors(self):
-        # Following issue #344 it seems more critical. There may be
-        # more cases, where aiokafka just does not handle correctly in
-        # coordination (like ConnectionError in said issue).
-        # Original issue #294
-
-        consumer = AIOKafkaConsumer(
-            loop=self.loop,
-            enable_auto_commit=False,
-            auto_offset_reset="earliest",
-            group_id="group-" + self.id(),
-            bootstrap_servers=self.hosts)
-        yield from consumer.start()
-
-        with self.assertRaises(KafkaError):
-            with mock.patch.object(consumer._coordinator, "_send_req") as m:
-                @asyncio.coroutine
-                def mock_send_req(request):
-                    res = mock.Mock()
-                    res.error_code = UnknownError.errno
-                    return res
-                m.side_effect = mock_send_req
-
-                consumer.subscribe([self.topic])  # Force join
-                yield from consumer.getone()
-
-            # We still need proper cleanup if this succeeds
-            self.add_cleanup(consumer.stop)
-
-        with self.assertRaises(KafkaError):
-            yield from consumer.stop()
-
-    @run_until_complete
     def test_consumer_invalid_session_timeout(self):
         # Following issue #344 it seems more critical. There may be
         # more cases, where aiokafka just does not handle correctly in
@@ -1661,15 +1645,9 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
             auto_offset_reset="earliest",
             group_id="group-" + self.id(), bootstrap_servers=self.hosts,
             session_timeout_ms=200, heartbeat_interval_ms=100)
+        self.add_cleanup(consumer.stop)
         with self.assertRaises(InvalidSessionTimeoutError):
             yield from consumer.start()
-
-            # We still need proper cleanup if this succeeds
-            self.add_cleanup(consumer.stop)
-
-        # In case of success it will need to raise error again on stop
-        with self.assertRaises(InvalidSessionTimeoutError):
-            yield from consumer.stop()
 
     @run_until_complete
     def test_consumer_invalid_crc_in_records(self):
@@ -1813,3 +1791,156 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
 
         pos = yield from consumer.position(TopicPartition(self.topic, 0))
         self.assertEqual(pos, batch_meta.offset + 10)
+
+    @run_until_complete
+    def test_consumer_propagates_coordinator_errors(self):
+        # Following issue #344 it seems more critical. There may be
+        # more cases, where aiokafka just does not handle correctly in
+        # coordination (like ConnectionError in said issue).
+        # Original issue #294
+
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id="group-" + self.id(),
+            bootstrap_servers=self.hosts)
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        with mock.patch.object(consumer._coordinator, "_send_req") as m:
+            @asyncio.coroutine
+            def mock_send_req(request):
+                res = mock.Mock()
+                res.error_code = UnknownError.errno
+                return res
+            m.side_effect = mock_send_req
+
+            consumer.subscribe([self.topic])  # Force join error
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+            # This time we won't kill the fetch waiter, we will check errors
+            # before waiting
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+            # Error in aiokafka code case, should be raised to user too
+            m.side_effect = ValueError
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+        # Even after error should be stopped we already have a broken
+        # coordination routine
+        with self.assertRaises(KafkaError):
+            yield from consumer.getone()
+
+    @run_until_complete
+    def test_consumer_propagates_heartbeat_errors(self):
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id="group-" + self.id(),
+            bootstrap_servers=self.hosts)
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        with mock.patch.object(consumer._coordinator, "_do_heartbeat") as m:
+            m.side_effect = UnknownError
+
+            consumer.subscribe([self.topic])  # Force join error
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+            # This time we won't kill the fetch waiter, we will check errors
+            # before waiting
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+    @run_until_complete
+    def test_consumer_propagates_commit_refresh_errors(self):
+        consumer = AIOKafkaConsumer(
+            loop=self.loop,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            group_id="group-" + self.id(),
+            bootstrap_servers=self.hosts,
+            metadata_max_age_ms=500)
+        yield from consumer.start()
+        self.add_cleanup(consumer.stop)
+
+        with mock.patch.object(
+                consumer._coordinator, "_do_fetch_commit_offsets") as m:
+            m.side_effect = UnknownError
+
+            consumer.subscribe([self.topic])  # Force join error
+            subscription = consumer._subscription.subscription
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+            # This time we won't kill the fetch waiter, we will check errors
+            # before waiting
+            with self.assertRaises(KafkaError):
+                yield from consumer.getone()
+
+            refresh_event = subscription.assignment.commit_refresh_needed
+            self.assertTrue(refresh_event.is_set())
+
+    @kafka_versions('>=0.11.0')
+    @run_until_complete
+    def test_consumer_with_headers(self):
+        yield from self.send_messages(
+            0, [0], headers=[("header1", b"17")])
+        # Start a consumer_factory
+        consumer = yield from self.consumer_factory()
+
+        message = yield from consumer.getone()
+        self.assertEqual(message.value, b"0")
+        self.assertEqual(message.headers, (("header1", b"17"), ))
+
+    @run_until_complete
+    def test_consumer_pause_resume(self):
+        yield from self.send_messages(0, range(5))
+        yield from self.send_messages(1, range(5))
+
+        consumer = yield from self.consumer_factory()
+        tp0 = TopicPartition(self.topic, 0)
+
+        self.assertEqual(consumer.paused(), set())
+        seen_partitions = set()
+        for _ in range(10):
+            msg = yield from consumer.getone()
+            seen_partitions.add(msg.partition)
+        self.assertEqual(seen_partitions, {0, 1})
+
+        yield from consumer.seek_to_beginning()
+        consumer.pause(tp0)
+        self.assertEqual(consumer.paused(), {tp0})
+        seen_partitions = set()
+        for _ in range(5):
+            msg = yield from consumer.getone()
+            seen_partitions.add(msg.partition)
+        self.assertEqual(seen_partitions, {1})
+
+        yield from consumer.seek_to_beginning()
+        consumer.resume(tp0)
+        self.assertEqual(consumer.paused(), set())
+        seen_partitions = set()
+        for _ in range(10):
+            msg = yield from consumer.getone()
+            seen_partitions.add(msg.partition)
+        self.assertEqual(seen_partitions, {0, 1})
+
+        # Message send in fetch process
+        get_task = ensure_future(consumer.getone(), loop=self.loop)
+        asyncio.sleep(0.1, loop=self.loop)
+        self.assertFalse(get_task.done())
+
+        # NOTE: we pause after sending fetch requests. We just don't return
+        # message to the user
+        consumer.pause(tp0)
+        yield from self.send_messages(0, [10])
+
+        with self.assertRaises(asyncio.TimeoutError):
+            yield from asyncio.wait_for(get_task, timeout=0.5, loop=self.loop)

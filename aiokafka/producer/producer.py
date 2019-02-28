@@ -15,8 +15,7 @@ from aiokafka.errors import (
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import TopicPartition
 from aiokafka.util import (
-    INTEGER_MAX_VALUE, PY_341, PY_36, wait_for_reponse_or_error,
-    commit_structure_validate,
+    INTEGER_MAX_VALUE, PY_341, PY_36, commit_structure_validate,
 )
 
 from .message_accumulator import MessageAccumulator
@@ -52,7 +51,10 @@ class BaseProducer(abc.ABC):
                  retry_backoff_ms=100, security_protocol="PLAINTEXT",
                  ssl_context=None, connections_max_idle_ms=540000,
                  transaction_timeout_ms=60000,
-                 on_irrecoverable_error=None):
+                 on_irrecoverable_error=None,
+                 sasl_mechanism="PLAIN",
+                 sasl_plain_password=None,
+                 sasl_plain_username=None):
         if acks not in (0, 1, -1, 'all', _missing):
             raise ValueError("Invalid ACKS parameter")
         if compression_type not in ('gzip', 'snappy', 'lz4', None):
@@ -96,6 +98,9 @@ class BaseProducer(abc.ABC):
         self._transaction_timeout_ms = transaction_timeout_ms
         self._transaction_timeout_ms = transaction_timeout_ms
         self._on_irrecoverable_error = on_irrecoverable_error
+        self._sasl_mechanism = sasl_mechanism
+        self._sasl_plain_username = sasl_plain_username
+        self._sals_plain_password = sasl_plain_password
 
         self.client = AIOKafkaClient(
             loop=loop, bootstrap_servers=bootstrap_servers,
@@ -104,7 +109,10 @@ class BaseProducer(abc.ABC):
             retry_backoff_ms=retry_backoff_ms,
             api_version=api_version, security_protocol=security_protocol,
             ssl_context=ssl_context,
-            connections_max_idle_ms=connections_max_idle_ms)
+            connections_max_idle_ms=connections_max_idle_ms,
+            sasl_mechanism=sasl_mechanism,
+            sasl_plain_username=sasl_plain_username,
+            sals_plain_password=sasl_plain_password)
         self._metadata = self.client.cluster
         self._loop = loop
         if loop.get_debug():
@@ -229,13 +237,9 @@ class BaseProducer(abc.ABC):
         return self._partitioner(
             serialized_key, all_partitions, available)
 
-    def _wait_for_reponse_or_error(self, coro, *, shield):
-        return wait_for_reponse_or_error(
-            coro, [self._sender.sender_task], shield=shield, loop=self._loop)
-
     @asyncio.coroutine
     def send(self, topic, value=None, key=None, partition=None,
-             timestamp_ms=None, transactional_id=None):
+             timestamp_ms=None, headers=None, transactional_id=None):
         """Publish a message to a topic.
 
         Arguments:
@@ -286,6 +290,14 @@ class BaseProducer(abc.ABC):
         # Ensure transaction is started and not committing
         self._verify_txn_started(transactional_id)
 
+        if headers is not None:
+            if self.client.api_version < (0, 11):
+                raise UnsupportedVersionError(
+                    "Headers not supported before Kafka 0.11")
+        else:
+            # Record parser/builder support only list type, no explicit None
+            headers = []
+
         key_bytes, value_bytes = self._serialize(topic, key, value)
         partition = self._partition(topic, partition, key, value,
                                     key_bytes, value_bytes)
@@ -297,7 +309,7 @@ class BaseProducer(abc.ABC):
             transactional_id, tp)
         fut = yield from message_accumulator.add_message(
             tp, key_bytes, value_bytes, self._request_timeout_ms / 1000,
-            timestamp_ms=timestamp_ms)
+            timestamp_ms=timestamp_ms, headers=headers)
         return fut
 
     @asyncio.coroutine
@@ -431,6 +443,13 @@ class AIOKafkaProducer(BaseProducer):
             explicitly set by the user it will be chosen. If incompatible
             values are set, a ``ValueError`` will be thrown.
             New in version 0.5.0.
+        sasl_mechanism (str): Authentication mechanism when security_protocol
+            is configured for SASL_PLAINTEXT or SASL_SSL. Valid values are:
+            PLAIN, GSSAPI. Default: PLAIN
+        sasl_plain_username (str): username for sasl PLAIN authentication.
+            Default: None
+        sasl_plain_password (str): password for sasl PLAIN authentication.
+            Default: None
 
     Note:
         Many configuration parameters are taken from the Java client:
@@ -544,9 +563,9 @@ class AIOKafkaProducer(BaseProducer):
         log.debug(
             "Beginning a new transaction for id %s",
             self._txn_manager.transactional_id)
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             self._txn_manager.wait_for_pid(),
-            shield=True,
+            loop=self._loop,
         )
         self._txn_manager.begin_transaction()
 
@@ -557,9 +576,9 @@ class AIOKafkaProducer(BaseProducer):
             "Committing transaction for id %s",
             self._txn_manager.transactional_id)
         self._txn_manager.committing_transaction()
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             self._txn_manager.wait_for_transaction_end(),
-            shield=True,
+            loop=self._loop,
         )
 
     @asyncio.coroutine
@@ -569,9 +588,9 @@ class AIOKafkaProducer(BaseProducer):
             "Aborting transaction for id %s",
             self._txn_manager.transactional_id)
         self._txn_manager.aborting_transaction()
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             self._txn_manager.wait_for_transaction_end(),
-            shield=True,
+            loop=self._loop,
         )
 
     def transaction(self):
@@ -594,7 +613,7 @@ class AIOKafkaProducer(BaseProducer):
             "Begin adding offsets %s for consumer group %s to transaction",
             formatted_offsets, group_id)
         fut = self._txn_manager.add_offsets_to_txn(formatted_offsets, group_id)
-        yield from self._wait_for_reponse_or_error(fut, shield=True)
+        yield from asyncio.shield(fut, loop=self._loop)
 
     def create_batch(self):
         """Create and return an empty BatchBuilder.
@@ -652,6 +671,10 @@ class TransactionContext:
     @asyncio.coroutine
     def __aexit__(self, exc_type, exc_value, traceback):
         if exc_type is not None:
+            # If called directly we want the API to raise a InvalidState error,
+            # but when exiting a context manager we should just let it out.
+            if self._producer._txn_manager.is_fatal_error():
+                return
             yield from self._producer.abort_transaction()
         else:
             yield from self._producer.commit_transaction()
@@ -844,9 +867,9 @@ class MultiTXNProducer(BaseProducer):
         if txn_manager is None:
             txn_manager = yield from self._init_transaction(transactional_id)
 
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             txn_manager.wait_for_pid(),
-            shield=True,
+            loop=self._loop,
         )
         txn_manager.begin_transaction()
 
@@ -856,9 +879,9 @@ class MultiTXNProducer(BaseProducer):
             "Committing transaction for id %s", transactional_id)
         txn_manager = self._transactions[transactional_id]
         txn_manager.committing_transaction()
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             txn_manager.wait_for_transaction_end(),
-            shield=True,
+            loop=self._loop,
         )
 
     @asyncio.coroutine
@@ -867,9 +890,9 @@ class MultiTXNProducer(BaseProducer):
             "Aborting transaction for id %s", transactional_id)
         txn_manager = self._transactions[transactional_id]
         txn_manager.aborting_transaction()
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             txn_manager.wait_for_transaction_end(),
-            shield=True,
+            loop=self._loop,
         )
 
     @asyncio.coroutine
@@ -880,9 +903,9 @@ class MultiTXNProducer(BaseProducer):
         if txn_manager is not None:
             if txn_manager.is_in_transaction():
                 txn_manager.aborting_transaction()
-                yield from self._wait_for_reponse_or_error(
+                yield from asyncio.shield(
                     txn_manager.wait_for_transaction_end(),
-                    shield=True,
+                    loop=self._loop,
                 )
         yield from self._wait_for_sender1(sender, accumulator)
 
@@ -896,9 +919,9 @@ class MultiTXNProducer(BaseProducer):
                 return
         log.debug(
             "Beginning a new transaction for id %s", transactional_id)
-        yield from self._wait_for_reponse_or_error(
+        yield from asyncio.shield(
             txn_manager.wait_for_pid(),
-            shield=True,
+            loop=self._loop,
         )
         txn_manager.begin_transaction()
 
@@ -919,5 +942,5 @@ class MultiTXNProducer(BaseProducer):
             formatted_offsets, group_id)
         fut = txn_manager.add_offsets_to_txn(formatted_offsets, group_id)
         log.debug('+WAIT FOR RESPONSE OR ERROR %r' % (fut,))
-        yield from self._wait_for_reponse_or_error(fut, shield=True)
+        yield from asyncio.shield(fut, loop=self._loop)
         log.debug('-WAIT FOR RESPONSE OR ERROR %r' % (fut,))

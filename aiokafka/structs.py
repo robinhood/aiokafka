@@ -1,9 +1,11 @@
 import collections
-from rhkafka.common import OffsetAndMetadata, TopicPartition, BrokerMetadata
+from rhkafka.common import (
+    OffsetAndMetadata, TopicPartition, BrokerMetadata, PartitionMetadata
+)
 
 __all__ = [
     "OffsetAndMetadata", "TopicPartition", "RecordMetadata", "ConsumerRecord",
-    "BrokerMetadata"
+    "BrokerMetadata", "PartitionMetadata"
 ]
 
 RecordMetadata = collections.namedtuple(
@@ -13,7 +15,8 @@ RecordMetadata = collections.namedtuple(
 ConsumerRecord = collections.namedtuple(
     "ConsumerRecord", ["topic", "partition", "offset", "timestamp",
                        "timestamp_type", "key", "value", "checksum",
-                       "serialized_key_size", "serialized_value_size"])
+                       "serialized_key_size", "serialized_value_size",
+                       "headers"])
 
 OffsetAndTimestamp = collections.namedtuple(
     "OffsetAndTimestamp", ["offset", "timestamp"])

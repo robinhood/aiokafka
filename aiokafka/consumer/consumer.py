@@ -18,8 +18,7 @@ from aiokafka.errors import (
 )
 from aiokafka.structs import TopicPartition
 from aiokafka.util import (
-    PY_341, PY_35, PY_352, PY_36, wait_for_reponse_or_error,
-    commit_structure_validate
+    PY_341, PY_35, PY_352, PY_36, commit_structure_validate
 )
 from aiokafka import __version__
 
@@ -176,6 +175,13 @@ class AIOKafkaConsumer(object):
             Further, when in *read_committed* the seek_to_end method will
             return the LSO. See method docs below. Default: "read_uncommitted"
 
+        sasl_mechanism (str): Authentication mechanism when security_protocol
+            is configured for SASL_PLAINTEXT or SASL_SSL. Valid values are:
+            PLAIN, GSSAPI. Default: PLAIN
+        sasl_plain_username (str): username for sasl PLAIN authentication.
+            Default: None
+        sasl_plain_password (str): password for sasl PLAIN authentication.
+            Default: None
     Note:
         Many configuration parameters are taken from Java Client:
         https://kafka.apache.org/documentation.html#newconsumerconfigs
@@ -211,7 +217,10 @@ class AIOKafkaConsumer(object):
                  api_version='auto',
                  exclude_internal_topics=True,
                  connections_max_idle_ms=540000,
-                 isolation_level="read_uncommitted"):
+                 isolation_level="read_uncommitted",
+                 sasl_mechanism="PLAIN",
+                 sasl_plain_password=None,
+                 sasl_plain_username=None):
         if max_poll_records is not None and (
                 not isinstance(max_poll_records, int) or max_poll_records < 1):
             raise ValueError("`max_poll_records` should be positive Integer")
@@ -224,7 +233,10 @@ class AIOKafkaConsumer(object):
             api_version=api_version,
             ssl_context=ssl_context,
             security_protocol=security_protocol,
-            connections_max_idle_ms=connections_max_idle_ms)
+            connections_max_idle_ms=connections_max_idle_ms,
+            sasl_mechanism=sasl_mechanism,
+            sasl_plain_username=sasl_plain_username,
+            sasl_plain_password=sasl_plain_password)
 
         self._group_id = group_id
         self._heartbeat_interval_ms = heartbeat_interval_ms
@@ -245,6 +257,7 @@ class AIOKafkaConsumer(object):
         self._max_poll_records = max_poll_records
         self._consumer_timeout = consumer_timeout_ms / 1000
         self._isolation_level = isolation_level
+
         self._check_crcs = check_crcs
         self._subscription = SubscriptionState(loop=loop)
         self._fetcher = None
@@ -333,10 +346,7 @@ class AIOKafkaConsumer(object):
                 if self._subscription.partitions_auto_assigned():
                     # Either we passed `topics` to constructor or `subscribe`
                     # was called before `start`
-                    yield from self._wait_for_data_or_error(
-                        self._subscription.wait_for_assignment(),
-                        shield=False
-                    )
+                    yield from self._subscription.wait_for_assignment()
                 else:
                     # `assign` was called before `start`. We did not start
                     # this task on that call, as coordinator was yet to be
@@ -356,8 +366,6 @@ class AIOKafkaConsumer(object):
                     # was called before `start`
                     yield from self._client.force_metadata_update()
                     self._coordinator.assign_all_partitions(check_unknown=True)
-                else:
-                    self._coordinator.reset_committed()
 
     @asyncio.coroutine
     def _wait_topics(self):
@@ -401,8 +409,6 @@ class AIOKafkaConsumer(object):
                 # refresh commit positions for all assigned partitions
                 assignment = self._subscription.subscription.assignment
                 self._coordinator.start_commit_offsets_refresh_task(assignment)
-            else:
-                self._coordinator.reset_committed()
 
     def assignment(self):
         """ Get the set of partitions currently assigned to this consumer.
@@ -593,12 +599,15 @@ class AIOKafkaConsumer(object):
             if not self._subscription.is_assigned(partition):
                 raise IllegalStateError(
                     'Partition {} is not assigned'.format(partition))
+
             assignment = self._subscription.subscription.assignment
             tp_state = assignment.state_value(partition)
             if not tp_state.has_valid_position:
+                self._coordinator.check_errors()
                 yield from asyncio.wait(
                     [tp_state.wait_for_position(),
                      assignment.unassign_future],
+                    timeout=self._request_timeout_ms / 1000,
                     return_when=asyncio.FIRST_COMPLETED, loop=self._loop,
                 )
                 if not tp_state.has_valid_position:
@@ -606,6 +615,7 @@ class AIOKafkaConsumer(object):
                         raise IllegalStateError(
                             'Partition {} is not assigned'.format(partition))
                     if self._subscription.subscription.assignment is None:
+                        self._coordinator.check_errors()
                         yield from self._subscription.wait_for_assignment()
                     continue
             return tp_state.position
@@ -716,8 +726,18 @@ class AIOKafkaConsumer(object):
 
         for tp in partitions:
             log.debug("Seeking to beginning of partition %s", tp)
-        yield from self._fetcher.request_offset_reset(
+
+        fut = self._fetcher.request_offset_reset(
             partitions, OffsetResetStrategy.EARLIEST)
+        assignment = self._subscription.subscription.assignment
+        yield from asyncio.wait(
+            [fut, assignment.unassign_future],
+            timeout=self._request_timeout_ms / 1000,
+            return_when=asyncio.FIRST_COMPLETED,
+            loop=self._loop
+        )
+        self._coordinator.check_errors()
+        return fut.done()
 
     @asyncio.coroutine
     def seek_to_end(self, *partitions):
@@ -750,8 +770,17 @@ class AIOKafkaConsumer(object):
 
         for tp in partitions:
             log.debug("Seeking to end of partition %s", tp)
-        yield from self._fetcher.request_offset_reset(
+        fut = self._fetcher.request_offset_reset(
             partitions, OffsetResetStrategy.LATEST)
+        assignment = self._subscription.subscription.assignment
+        yield from asyncio.wait(
+            [fut, assignment.unassign_future],
+            timeout=self._request_timeout_ms / 1000,
+            return_when=asyncio.FIRST_COMPLETED,
+            loop=self._loop
+        )
+        self._coordinator.check_errors()
+        return fut.done()
 
     @asyncio.coroutine
     def seek_to_committed(self, *partitions):
@@ -1000,15 +1029,6 @@ class AIOKafkaConsumer(object):
         log.info(
             "Unsubscribed all topics or patterns and assigned partitions")
 
-    def _wait_for_data_or_error(self, coro, *, shield):
-        futs = [self._fetcher.error_future]
-        coordination_error_fut = self._coordinator.error_future
-        if coordination_error_fut is not None:  # group_id is None case
-            futs.append(coordination_error_fut)
-
-        return wait_for_reponse_or_error(
-            coro, futs, shield=shield, loop=self._loop)
-
     @asyncio.coroutine
     def getone(self, *partitions):
         """
@@ -1048,8 +1068,10 @@ class AIOKafkaConsumer(object):
         if self._closed:
             raise ConsumerStoppedError()
 
-        msg = yield from self._wait_for_data_or_error(
-            self._fetcher.next_record(partitions), shield=False)
+        # Raise coordination errors if any
+        self._coordinator.check_errors()
+
+        msg = yield from self._fetcher.next_record(partitions)
         return msg
 
     @asyncio.coroutine
@@ -1094,14 +1116,57 @@ class AIOKafkaConsumer(object):
                 not isinstance(max_records, int) or max_records < 1):
             raise ValueError("`max_records` must be a positive Integer")
 
+        # Raise coordination errors if any
+        self._coordinator.check_errors()
+
         timeout = timeout_ms / 1000
-        records = yield from self._wait_for_data_or_error(
-            self._fetcher.fetched_records(
-                partitions, timeout,
-                max_records=max_records or self._max_poll_records),
-            shield=False
-        )
+        records = yield from self._fetcher.fetched_records(
+            partitions, timeout,
+            max_records=max_records or self._max_poll_records)
         return records
+
+    def pause(self, *partitions):
+        """Suspend fetching from the requested partitions.
+
+        Future calls to :meth:`~aiokafka.AIOKafkaConsumer.getmany` will not
+        return any records from these partitions until they have been resumed
+        using :meth:`~aiokafka.AIOKafkaConsumer.resume`.
+
+        Note: This method does not affect partition subscription.
+        In particular, it does not cause a group rebalance when automatic
+        assignment is used.
+
+        Arguments:
+            *partitions (TopicPartition): Partitions to pause.
+        """
+        if not all([isinstance(p, TopicPartition) for p in partitions]):
+            raise TypeError('partitions must be TopicPartition namedtuples')
+
+        for partition in partitions:
+            log.debug("Pausing partition %s", partition)
+            self._subscription.pause(partition)
+
+    def paused(self):
+        """Get the partitions that were previously paused using
+        :meth:`~aiokafka.AIOKafkaConsumer.pause`.
+
+        Returns:
+            set: {partition (TopicPartition), ...}
+        """
+        return self._subscription.paused_partitions()
+
+    def resume(self, *partitions):
+        """Resume fetching from the specified (paused) partitions.
+
+        Arguments:
+            *partitions (TopicPartition): Partitions to resume.
+        """
+        if not all([isinstance(p, TopicPartition) for p in partitions]):
+            raise TypeError('partitions must be TopicPartition namedtuples')
+
+        for partition in partitions:
+            log.debug("Resuming partition %s", partition)
+            self._subscription.resume(partition)
 
     if PY_35:
         def __aiter__(self):
