@@ -792,8 +792,11 @@ class MultiTXNProducer(BaseProducer):
         # If the sender task is down there is no way for accumulator to flush
         if sender is not None:
             if sender.sender_task is not None:
+                futs = [sender.sender_task]
+                if accumulator is not None:
+                    futs.append(accumulator.close())
                 yield from asyncio.wait(
-                    [accumulator.close(), sender.sender_task],
+                    futs,
                     return_when=asyncio.FIRST_COMPLETED,
                     loop=self._loop)
             yield from sender.close()
@@ -881,7 +884,6 @@ class MultiTXNProducer(BaseProducer):
                     txn_manager.wait_for_transaction_end(),
                     shield=True,
                 )
-        yield from accumulator.flush()
         yield from self._wait_for_sender1(sender, accumulator)
 
     @asyncio.coroutine
