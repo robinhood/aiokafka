@@ -202,50 +202,31 @@ class AIOKafkaClient:
                 bootstrap_conn.close()
                 continue
 
-                try:
-                    bootstrap_conn = yield from create_conn(
-                        host, port, loop=self._loop, client_id=self._client_id,
-                        request_timeout_ms=self._request_timeout_ms,
-                        ssl_context=self._ssl_context,
-                        security_protocol=self._security_protocol,
-                        max_idle_ms=self._connections_max_idle_ms)
-                except (OSError, asyncio.TimeoutError) as err:
-                    log.error('Unable connect to "%s:%s": %s', host, port, err)
-                    continue
+            self.cluster.update_metadata(metadata)
 
-                try:
-                    metadata = yield from bootstrap_conn.send(metadata_request)
-                except KafkaError as err:
-                    log.warning('Unable to request metadata from "%s:%s": %s',
-                                host, port, err)
-                    bootstrap_conn.close()
-                    continue
-
-                self.cluster.update_metadata(metadata)
-
-                # A cluster with no topics can return no broker metadata...
-                # In that case, we should keep the bootstrap connection till
-                # we get a normal cluster layout.
-                if not len(self.cluster.brokers()):
-                    bootstrap_id = ('bootstrap', ConnectionGroup.DEFAULT)
-                    self._conns[bootstrap_id] = bootstrap_conn
-                else:
-                    bootstrap_conn.close()
-
-                log.debug('Received cluster metadata: %s', self.cluster)
-                # detect api version if need
-                if self._api_version == 'auto':
-                    self._api_version = yield from self.check_version()
-
-                if self._sync_task is None:
-                    # starting metadata synchronizer task
-                    self._sync_task = ensure_future(
-                        self._md_synchronizer(), loop=self._loop)
-                    return
+            # A cluster with no topics can return no broker metadata...
+            # In that case, we should keep the bootstrap connection till
+            # we get a normal cluster layout.
+            if not len(self.cluster.brokers()):
+                bootstrap_id = ('bootstrap', ConnectionGroup.DEFAULT)
+                self._conns[bootstrap_id] = bootstrap_conn
             else:
-                raise ConnectionError(
-                    'Unable to bootstrap from {}'.format(self.hosts))
+                bootstrap_conn.close()
 
+            log.debug('Received cluster metadata: %s', self.cluster)
+            break
+        else:
+            raise ConnectionError(
+                'Unable to bootstrap from {}'.format(self.hosts))
+
+        # detect api version if need
+        if self._api_version == 'auto':
+            self._api_version = yield from self.check_version()
+
+        if self._sync_task is None:
+            # starting metadata synchronizer task
+            self._sync_task = ensure_future(
+                self._md_synchronizer(), loop=self._loop)
 
     @asyncio.coroutine
     def _md_synchronizer(self):

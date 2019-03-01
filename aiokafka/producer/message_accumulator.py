@@ -333,15 +333,17 @@ class MessageAccumulator:
             else:
                 batch = pending_batches[-1]
 
-        future = batch.append(key, value, timestamp_ms, headers=headers)
-        if future is None:
-            # Batch is full, can't append data atm,
-            # waiting until batch per topic-partition is drained
-            start = self._loop.time()
-            yield from batch.wait_drain(timeout)
-            timeout -= self._loop.time() - start
-            if timeout <= 0:
-                raise KafkaTimeoutError()
+            future = batch.append(key, value, timestamp_ms, headers=headers)
+            if future is None:
+                # Batch is full, can't append data atm,
+                # waiting until batch per topic-partition is drained
+                start = self._loop.time()
+                yield from batch.wait_drain(timeout)
+                timeout -= self._loop.time() - start
+                if timeout <= 0:
+                    raise KafkaTimeoutError()
+            else:
+                return future
 
     def data_waiter(self):
         """ Return waiter future that will be resolved when accumulator contain

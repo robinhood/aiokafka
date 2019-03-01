@@ -100,7 +100,7 @@ class BaseProducer(abc.ABC):
         self._on_irrecoverable_error = on_irrecoverable_error
         self._sasl_mechanism = sasl_mechanism
         self._sasl_plain_username = sasl_plain_username
-        self._sals_plain_password = sasl_plain_password
+        self._sasl_plain_password = sasl_plain_password
 
         self.client = AIOKafkaClient(
             loop=loop, bootstrap_servers=bootstrap_servers,
@@ -112,7 +112,7 @@ class BaseProducer(abc.ABC):
             connections_max_idle_ms=connections_max_idle_ms,
             sasl_mechanism=sasl_mechanism,
             sasl_plain_username=sasl_plain_username,
-            sals_plain_password=sasl_plain_password)
+            sasl_plain_password=sasl_plain_password)
         self._metadata = self.client.cluster
         self._loop = loop
         if loop.get_debug():
