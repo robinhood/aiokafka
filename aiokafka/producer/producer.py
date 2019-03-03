@@ -51,12 +51,9 @@ class BaseProducer(abc.ABC):
                  retry_backoff_ms=100, security_protocol="PLAINTEXT",
                  ssl_context=None, connections_max_idle_ms=540000,
                  on_irrecoverable_error=None,
-                 enable_idempotence=False,
-                 transactional_id=None,
-                 transaction_timeout_ms=60000,
-                 sasl_mechanism="PLAIN",
-                 sasl_plain_password=None,
-                 sasl_plain_username=None,
+                 enable_idempotence=False, transactional_id=None,
+                 transaction_timeout_ms=60000, sasl_mechanism="PLAIN",
+                 sasl_plain_password=None, sasl_plain_username=None,
                  sasl_kerberos_service_name='kafka',
                  sasl_kerberos_domain_name=None):
         if acks not in (0, 1, -1, 'all', _missing):
