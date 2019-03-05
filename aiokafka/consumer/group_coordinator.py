@@ -1239,12 +1239,29 @@ class CoordinatorGroupRebalance:
             group_protocol = (assignor.name, metadata)
             metadata_list.append(group_protocol)
 
-        request = JoinGroupRequest(
-            self.group_id,
-            self._session_timeout_ms,
-            self._coordinator.member_id,
-            ConsumerProtocol.PROTOCOL_TYPE,
-            metadata_list)
+        if self._api_version < (0, 10, 1):
+            request = JoinGroupRequest[0](
+                self.group_id,
+                self._session_timeout_ms,
+                self._coordinator.member_id,
+                ConsumerProtocol.PROTOCOL_TYPE,
+                metadata_list)
+        elif self._api_version < (0, 11, 0):
+            request = JoinGroupRequest[1](
+                self.group_id,
+                self._session_timeout_ms,
+                self._rebalance_timeout_ms,
+                self._coordinator.member_id,
+                ConsumerProtocol.PROTOCOL_TYPE,
+                metadata_list)
+        else:
+            request = JoinGroupRequest[2](
+                self.group_id,
+                self._session_timeout_ms,
+                self._rebalance_timeout_ms,
+                self._coordinator.member_id,
+                ConsumerProtocol.PROTOCOL_TYPE,
+                metadata_list)
 
         # create the request for the coordinator
         log.debug("Sending JoinGroup (%s) to coordinator %s",
