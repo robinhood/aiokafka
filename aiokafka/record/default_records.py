@@ -60,7 +60,7 @@ from .util import decode_varint, encode_varint, calc_crc32c, size_of_varint
 
 from aiokafka.errors import CorruptRecordException
 from aiokafka.util import NO_EXTENSIONS
-from rhkafka.codec import (
+from kafka.codec import (
     gzip_encode, snappy_encode, lz4_encode,
     gzip_decode, snappy_decode, lz4_decode
 )

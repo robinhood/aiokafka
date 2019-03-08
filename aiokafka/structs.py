@@ -1,5 +1,5 @@
 import collections
-from rhkafka.common import (
+from kafka.common import (
     OffsetAndMetadata, TopicPartition, BrokerMetadata, PartitionMetadata
 )
 

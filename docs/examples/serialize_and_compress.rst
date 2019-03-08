@@ -51,7 +51,7 @@ Consumer
  
     import json
     import asyncio
-    from rhkafka.common import KafkaError
+    from kafka.common import KafkaError
     from aiokafka import AIOKafkaConsumer
 
     def deserializer(serialized):

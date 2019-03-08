@@ -6,7 +6,7 @@ import time
 import weakref
 from unittest import mock
 
-from rhkafka.cluster import ClusterMetadata
+from kafka.cluster import ClusterMetadata
 
 from ._testutil import (
     KafkaIntegrationTestCase, run_until_complete, kafka_versions

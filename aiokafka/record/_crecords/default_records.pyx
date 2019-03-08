@@ -55,7 +55,7 @@
 # * Compression Type (0-2)
 
 from aiokafka.errors import CorruptRecordException
-from rhkafka.codec import (
+from kafka.codec import (
     gzip_encode, snappy_encode, lz4_encode,
     gzip_decode, snappy_decode, lz4_decode
 )

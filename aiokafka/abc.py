@@ -1,5 +1,5 @@
 import abc
-from rhkafka import ConsumerRebalanceListener as BaseConsumerRebalanceListener
+from kafka import ConsumerRebalanceListener as BaseConsumerRebalanceListener
 
 
 class ConsumerRebalanceListener(BaseConsumerRebalanceListener):

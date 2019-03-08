@@ -1,5 +1,5 @@
-from rhkafka.protocol.api import Request, Response
-from rhkafka.protocol.types import Int8, Int16, Int32, Schema, String
+from kafka.protocol.api import Request, Response
+from kafka.protocol.types import Int8, Int16, Int32, Schema, String
 
 
 class FindCoordinatorResponse_v0(Response):

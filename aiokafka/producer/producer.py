@@ -6,8 +6,8 @@ import traceback
 import warnings
 from typing import Mapping, MutableMapping
 
-from rhkafka.partitioner.default import DefaultPartitioner
-from rhkafka.codec import has_gzip, has_snappy, has_lz4
+from kafka.partitioner.default import DefaultPartitioner
+from kafka.codec import has_gzip, has_snappy, has_lz4
 
 from aiokafka.client import AIOKafkaClient
 from aiokafka.errors import (

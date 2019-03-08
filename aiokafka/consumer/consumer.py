@@ -5,7 +5,7 @@ import sys
 import traceback
 import warnings
 
-from rhkafka.coordinator.assignors.roundrobin import (
+from kafka.coordinator.assignors.roundrobin import (
     RoundRobinPartitionAssignor,
 )
 

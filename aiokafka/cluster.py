@@ -2,7 +2,7 @@ import collections
 import logging
 import time
 
-from rhkafka.cluster import ClusterMetadata as BaseClusterMetadata
+from kafka.cluster import ClusterMetadata as BaseClusterMetadata
 from aiokafka.structs import BrokerMetadata, PartitionMetadata, TopicPartition
 from aiokafka import errors as Errors
 

@@ -2,17 +2,17 @@ import asyncio
 import re
 from unittest import mock
 
-from rhkafka.protocol.group import (
+from kafka.protocol.group import (
     JoinGroupRequest_v0 as JoinGroupRequest,
     SyncGroupResponse_v0 as SyncGroupResponse,
     LeaveGroupRequest_v0 as LeaveGroupRequest,
     HeartbeatRequest_v0 as HeartbeatRequest,
 )
-from rhkafka.protocol.commit import (
+from kafka.protocol.commit import (
     OffsetCommitRequest, OffsetCommitResponse_v2,
     OffsetFetchRequest_v1 as OffsetFetchRequest
 )
-import rhkafka.common as Errors
+import kafka.common as Errors
 
 from ._testutil import KafkaIntegrationTestCase, run_until_complete
 

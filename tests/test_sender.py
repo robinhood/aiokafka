@@ -37,7 +37,7 @@ from aiokafka.errors import (
     TransactionalIdAuthorizationFailed, GroupAuthorizationFailedError
 )
 
-from rhkafka.protocol.metadata import MetadataRequest
+from kafka.protocol.metadata import MetadataRequest
 
 
 LOG_APPEND_TIME = 1

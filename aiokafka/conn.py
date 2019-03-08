@@ -8,11 +8,11 @@ import traceback
 import warnings
 import weakref
 
-from rhkafka.protocol.api import RequestHeader
-from rhkafka.protocol.admin import (
+from kafka.protocol.api import RequestHeader
+from kafka.protocol.admin import (
     SaslHandShakeRequest, SaslAuthenticateRequest, ApiVersionRequest
 )
-from rhkafka.protocol.commit import (
+from kafka.protocol.commit import (
     GroupCoordinatorResponse_v0 as GroupCoordinatorResponse)
 
 import aiokafka.errors as Errors
