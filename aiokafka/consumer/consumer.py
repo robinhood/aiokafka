@@ -818,7 +818,7 @@ class AIOKafkaConsumer(object):
             offset = yield from self.committed(tp)
             committed_offsets[tp] = offset
             log.debug("Seeking to committed of partition %s %s", tp, offset)
-            if offset and offset > 0:
+            if offset is not None and offset >= 0:
                 self._fetcher.seek_to(tp, offset)
         return committed_offsets
 
