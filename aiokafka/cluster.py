@@ -15,6 +15,7 @@ class ClusterMetadata(BaseClusterMetadata):
         super().__init__(*args, **kw)
         self._coordinators = {}
         self._coordinator_by_key = {}
+        self.missing_autocreate_topics = set()
 
     def coordinator_metadata(self, node_id):
         return self._coordinators.get(node_id)
@@ -64,6 +65,8 @@ class ClusterMetadata(BaseClusterMetadata):
         _new_unauthorized_topics = set()
         _new_internal_topics = set()
 
+        self.missing_autocreate_topics.clear()
+
         for topic_data in metadata.topics:
             if metadata.API_VERSION == 0:
                 error_code, topic, partitions = topic_data
@@ -86,6 +89,7 @@ class ClusterMetadata(BaseClusterMetadata):
             elif error_type is Errors.LeaderNotAvailableError:
                 log.warning("Topic %s is not available during auto-create"
                             " initialization", topic)
+                self.missing_autocreate_topics.add(topic)
             elif error_type is Errors.UnknownTopicOrPartitionError:
                 log.error("Topic %s not found in cluster metadata", topic)
             elif error_type is Errors.TopicAuthorizationFailedError:
