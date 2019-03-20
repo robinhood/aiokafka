@@ -14,10 +14,10 @@ flake:
 	extra=$$(python -c "import sys;sys.stdout.write('--exclude tests/test_pep492.py') if sys.version_info[:3] < (3, 5, 0) else sys.stdout.write('')"); \
 	flake8 aiokafka tests $$extra
 
-test: flake
+test:
 	py.test -s --no-print-logs --docker-image $(DOCKER_IMAGE) $(FLAGS) tests
 
-vtest: flake
+vtest:
 	py.test -s -v --docker-image $(DOCKER_IMAGE) $(FLAGS) tests
 
 cov cover coverage: flake
