@@ -285,7 +285,6 @@ class GroupCoordinator(BaseCoordinator):
         try:
             resp = yield from self._client.send(
                 node_id, request, group=ConnectionGroup.COORDINATION)
-        except Errors.KafkaError as err:
             log.error(
                 'Error sending %s to node %s [%s] -- marking coordinator dead',
                 request.__class__.__name__, node_id, err)
@@ -771,16 +770,6 @@ class GroupCoordinator(BaseCoordinator):
                 log.error(
                     "Heartbeat session expired - marking coordinator dead")
                 self.coordinator_dead()
-
-            # If consumer is idle (no records consumed) for too long we need
-            # to leave the group
-            idle_time = self._subscription.fetcher_idle_time
-            if idle_time < self._max_poll_interval:
-                sleep_time = min(
-                    sleep_time,
-                    self._max_poll_interval - idle_time)
-            else:
-                yield from self._maybe_leave_group()
 
         log.debug("Stopping heartbeat task")
 
