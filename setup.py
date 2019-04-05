@@ -22,11 +22,14 @@ else:
 
 # The extension part is copied from aiohttp's setup.py
 
-try:
-    from Cython.Build import cythonize
-    USE_CYTHON = True
-except ImportError:
+if os.environ.get('NO_CYTHON'):
     USE_CYTHON = False
+else:
+    try:
+        from Cython.Build import cythonize
+        USE_CYTHON = True
+    except ImportError:
+        USE_CYTHON = False
 
 ext = '.pyx' if USE_CYTHON else '.c'
 
