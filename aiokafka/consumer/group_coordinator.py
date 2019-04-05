@@ -285,6 +285,7 @@ class GroupCoordinator(BaseCoordinator):
         try:
             resp = yield from self._client.send(
                 node_id, request, group=ConnectionGroup.COORDINATION)
+        except Errors.KafkaError as err:
             log.error(
                 'Error sending %s to node %s [%s] -- marking coordinator dead',
                 request.__class__.__name__, node_id, err)
