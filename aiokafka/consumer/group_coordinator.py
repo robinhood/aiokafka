@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import contextlib
 import copy
 import logging
 import sys
@@ -20,6 +21,11 @@ from aiokafka.util import ensure_future, create_future
 log = logging.getLogger(__name__)
 
 UNKNOWN_OFFSET = -1
+
+
+@contextlib.contextmanager
+def nullcontext(enter_value=None):
+    yield enter_value
 
 
 class MissingAutoCreateTopic(Exception):
@@ -213,7 +219,10 @@ class GroupCoordinator(BaseCoordinator):
                  assignors=(RoundRobinPartitionAssignor,),
                  exclude_internal_topics=True,
                  max_poll_interval_ms=300000,
-                 rebalance_timeout_ms=30000
+                 rebalance_timeout_ms=30000,
+                 traced_from_parent_span=None,
+                 start_rebalancing_span=None,
+                 start_coordinator_span=None,
                  ):
         """Initialize the coordination manager.
 
@@ -234,6 +243,9 @@ class GroupCoordinator(BaseCoordinator):
         self._assignors = assignors
         self._enable_auto_commit = enable_auto_commit
         self._auto_commit_interval_ms = auto_commit_interval_ms
+        self._traced_from_parent_span = traced_from_parent_span
+        self._start_rebalancing_span = start_rebalancing_span
+        self._start_coordinator_span = start_coordinator_span
 
         self.generation = OffsetCommitRequest.DEFAULT_GENERATION_ID
         self.member_id = JoinGroupRequest[0].UNKNOWN_MEMBER_ID
@@ -270,6 +282,25 @@ class GroupCoordinator(BaseCoordinator):
 
         self._coordination_task = ensure_future(
             self._coordination_routine(), loop=loop)
+
+    def traced_from_parent_span(self, span=None, **extra_context):
+        if self._traced_from_parent_span is not None:
+            return self._traced_from_parent_span(span, **extra_context)
+        else:
+            # return passthrough decorator
+            return lambda fun: fun
+
+    def start_rebalancing_span(self):
+        if self._start_rebalancing_span is not None:
+            return self._start_rebalancing_span()
+        else:
+            return nullcontext()
+
+    def start_coordinator_span(self):
+        if self._start_coordinator_span is not None:
+            return self._start_coordinator_span()
+        else:
+            return nullcontext()
 
     def _on_metadata_change(self):
         self.request_rejoin()
@@ -378,10 +409,13 @@ class GroupCoordinator(BaseCoordinator):
         self._subscription.begin_reassignment()
         self._group_subscription = None
 
+        T = self.traced_from_parent_span()
+
         # commit offsets prior to rebalance if auto-commit enabled
         if previous_assignment is not None:
             try:
-                yield from self._maybe_do_last_autocommit(previous_assignment)
+                yield from T(self._maybe_do_last_autocommit)(
+                    previous_assignment)
             except Errors.KafkaError as err:
                 # We would retry any retriable commit already
                 log.error("OffsetCommit failed before join, ignoring: %s", err)
@@ -394,14 +428,18 @@ class GroupCoordinator(BaseCoordinator):
                  revoked, self.group_id)
         if self._subscription.listener:
             try:
-                res = self._subscription.listener.on_partitions_revoked(
-                    revoked)
-                if asyncio.iscoroutine(res):
-                    yield from res
+                yield from T(self._on_partitions_revoked)(revoked)
             except Exception:
                 log.exception("User provided subscription listener %s"
                               " for group %s failed on_partitions_revoked",
                               self._subscription.listener, self.group_id)
+
+    @asyncio.coroutine
+    def _on_partitions_revoked(self, revoked):
+        res = self._subscription.listener.on_partitions_revoked(
+            revoked)
+        if asyncio.iscoroutine(res):
+            yield from res
 
     @asyncio.coroutine
     def _perform_assignment(self, leader_id, assignment_strategy, members):
@@ -446,6 +484,7 @@ class GroupCoordinator(BaseCoordinator):
     @asyncio.coroutine
     def _on_join_complete(self, generation, member_id, protocol,
                           member_assignment_bytes):
+        T = self.traced_from_parent_span()
         assignor = self._lookup_assignor(protocol)
         assert assignor, 'invalid assignment protocol: %s' % protocol
 
@@ -462,7 +501,7 @@ class GroupCoordinator(BaseCoordinator):
         # We need to start this task before callback to avoid deadlocks.
         # Callback can rely on something like ``Consumer.position()`` that
         # requires committed point to be refreshed.
-        yield from self._stop_commit_offsets_refresh_task()
+        yield from T(self._stop_commit_offsets_refresh_task)()
         self.start_commit_offsets_refresh_task(
             self._subscription.subscription.assignment)
 
@@ -473,15 +512,19 @@ class GroupCoordinator(BaseCoordinator):
         # execute the user's callback after rebalance
         if self._subscription.listener:
             try:
-                res = self._subscription.listener.on_partitions_assigned(
-                    assigned)
-                if asyncio.iscoroutine(res):
-                    yield from res
+                yield from T(self._on_partitions_assigned)(assigned)
             except Exception:
                 log.exception("User provided listener %s for group %s"
                               " failed on partition assignment: %s",
                               self._subscription.listener, self.group_id,
                               assigned)
+
+    @asyncio.coroutine
+    def _on_partitions_assigned(self, assigned):
+        res = self._subscription.listener.on_partitions_assigned(
+            assigned)
+        if asyncio.iscoroutine(res):
+            yield from res
 
     def coordinator_dead(self):
         """ Mark the current coordinator as dead.
@@ -524,39 +567,44 @@ class GroupCoordinator(BaseCoordinator):
         if self.coordinator_id is not None:
             return
 
-        with (yield from self._coordinator_lookup_lock):
-            retry_backoff = self._retry_backoff_ms / 1000
-            while self.coordinator_id is None:
-                try:
-                    coordinator_id = (
-                        yield from self._client.coordinator_lookup(
-                            CoordinationType.GROUP, self.group_id)
-                    )
-                except Errors.GroupAuthorizationFailedError:
-                    err = Errors.GroupAuthorizationFailedError(self.group_id)
-                    raise err
-                except Errors.KafkaError as err:
-                    log.error("Group Coordinator Request failed: %s", err)
-                    if err.retriable:
-                        yield from self._client.force_metadata_update()
-                        yield from asyncio.sleep(
+        with self.start_coordinator_span() as span:
+            T = self.traced_from_parent_span(span)
+
+            with (yield from self._coordinator_lookup_lock):
+                retry_backoff = self._retry_backoff_ms / 1000
+                while self.coordinator_id is None:
+                    try:
+                        coordinator_id = (
+                            yield from T(self._client.coordinator_lookup)(
+                                CoordinationType.GROUP, self.group_id)
+                        )
+                    except Errors.GroupAuthorizationFailedError:
+                        err = Errors.GroupAuthorizationFailedError(
+                            self.group_id)
+                        raise err
+                    except Errors.KafkaError as err:
+                        log.error("Group Coordinator Request failed: %s", err)
+                        if err.retriable:
+                            yield from T(self._client.force_metadata_update)()
+                            yield from T(asyncio.sleep)(
+                                retry_backoff, loop=self._loop)
+                            continue
+                        else:
+                            raise
+
+                    # Try to connect to confirm that the connection can be
+                    # established.
+                    ready = yield from T(self._client.ready)(
+                        coordinator_id, group=ConnectionGroup.COORDINATION)
+                    if not ready:
+                        yield from T(asyncio.sleep)(
                             retry_backoff, loop=self._loop)
                         continue
-                    else:
-                        raise
 
-                # Try to connect to confirm that the connection can be
-                # established.
-                ready = yield from self._client.ready(
-                    coordinator_id, group=ConnectionGroup.COORDINATION)
-                if not ready:
-                    yield from asyncio.sleep(retry_backoff, loop=self._loop)
-                    continue
-
-                self.coordinator_id = coordinator_id
-                self._coordinator_dead_fut = create_future(loop=self._loop)
-                log.info("Discovered coordinator %s for group %s",
-                         self.coordinator_id, self.group_id)
+                    self.coordinator_id = coordinator_id
+                    self._coordinator_dead_fut = create_future(loop=self._loop)
+                    log.info("Discovered coordinator %s for group %s",
+                            self.coordinator_id, self.group_id)
 
     @asyncio.coroutine
     def _coordination_routine(self):
@@ -585,8 +633,8 @@ class GroupCoordinator(BaseCoordinator):
             try:
                 # Check if there was a change to subscription
                 if subscription is not None and not subscription.active:
-                    # The subscription can change few times, so we can not rely on
-                    # flags or topic lists. For example if user changes
+                    # The subscription can change few times, so we can not
+                    # rely on flags or topic lists. For example if user changes
                     # subscription from X to Y and back to X we still need to
                     # rejoin group.
                     self.request_rejoin()
@@ -617,11 +665,13 @@ class GroupCoordinator(BaseCoordinator):
 
                     assert assignment is not None and assignment.active
 
-                    # We will only try to commit offsets once here. In error case
-                    # the returned wait_timeout will be ``retry_backoff``. In
-                    # success case time to next autocommit deadline. If autocommit
-                    # is disabled timeout will be ``None``, ie. no timeout.
-                    wait_timeout = yield from self._maybe_do_autocommit(assignment)
+                    # We will only try to commit offsets once here. In error
+                    # case the returned wait_timeout will be ``retry_backoff``.
+                    # In success case time to next autocommit deadline.
+                    # If autocommit is disabled timeout will be ``None``,
+                    # ie. no timeout.
+                    wait_timeout = yield from self._maybe_do_autocommit(
+                        assignment)
 
                 except Errors.KafkaError as exc:
                     yield from self._push_error_to_user(exc)
@@ -631,8 +681,8 @@ class GroupCoordinator(BaseCoordinator):
                     self._closing,  # Will exit fast if close() called
                     self._coordinator_dead_fut,
                     subscription.unsubscribe_future]
-                # In case of manual assignment this future will be always set and
-                # we don't want a heavy loop here.
+                # In case of manual assignment this future will be always set
+                # and we don't want a heavy loop here.
                 # NOTE: metadata changes are for partition count and pattern
                 # subscription, which is irrelevant in case of user assignment.
                 if auto_assigned:
@@ -685,42 +735,45 @@ class GroupCoordinator(BaseCoordinator):
         # Also the rebalance can be issued by another node, that
         # discovered a new topic, which is still unknown to this
         # one.
-        if self._subscription.subscribed_pattern:
-            yield from self._client.force_metadata_update()
-            if not subscription.active:
+        with self.start_rebalancing_span() as span:
+            T = self.traced_from_parent_span(span)
+            if self._subscription.subscribed_pattern:
+                yield from T(self._client.force_metadata_update)()
+                if not subscription.active:
+                    return None
+
+            if not self._performed_join_prepare:
+                # NOTE: We pass the previously used assignment here.
+
+                yield from T(self._on_join_prepare)(prev_assignment)
+                self._performed_join_prepare = True
+
+            # NOTE: we did not stop heartbeat task before to keep the
+            # member alive during the callback, as it can commit offsets.
+            # See the ``RebalanceInProgressError`` case in heartbeat
+            # handling.
+            yield from T(self._stop_heartbeat_task)()
+
+            # We will not attempt rejoin if there is no activity on consumer
+            idle_time = self._subscription.fetcher_idle_time
+            if idle_time >= self._max_poll_interval:
+                yield from T(asyncio.sleep)(self._retry_backoff_ms / 1000)
                 return None
 
-        if not self._performed_join_prepare:
-            # NOTE: We pass the previously used assignment here.
-            yield from self._on_join_prepare(prev_assignment)
-            self._performed_join_prepare = True
-
-        # NOTE: we did not stop heartbeat task before to keep the
-        # member alive during the callback, as it can commit offsets.
-        # See the ``RebalanceInProgressError`` case in heartbeat
-        # handling.
-        yield from self._stop_heartbeat_task()
-
-        # We will not attempt rejoin if there is no activity on consumer
-        idle_time = self._subscription.fetcher_idle_time
-        if idle_time >= self._max_poll_interval:
-            yield from asyncio.sleep(self._retry_backoff_ms / 1000)
+            # We will only try to perform the rejoin once. If it fails,
+            # we will spin this loop another time, checking for coordinator
+            # and subscription changes.
+            # NOTE: We do re-join in sync. The group rebalance will fail on
+            # subscription change and coordinator failure by itself and
+            # this way we don't need to worry about racing or cancellation
+            # issues that could occur if re-join were to be a task.
+            success = yield from T(self._do_rejoin_group)(subscription)
+            if success:
+                self._performed_join_prepare = False
+                self._start_heartbeat_task()
+                return subscription.assignment
             return None
-
-        # We will only try to perform the rejoin once. If it fails,
-        # we will spin this loop another time, checking for coordinator
-        # and subscription changes.
-        # NOTE: We do re-join in sync. The group rebalance will fail on
-        # subscription change and coordinator failure by itself and
-        # this way we don't need to worry about racing or cancellation
-        # issues that could occur if re-join were to be a task.
-        success = yield from self._do_rejoin_group(subscription)
-        if success:
-            self._performed_join_prepare = False
-            self._start_heartbeat_task()
-            return subscription.assignment
-        return None
-
+    
     def _start_heartbeat_task(self):
         if self._heartbeat_task is None:
             self._heartbeat_task = ensure_future(
@@ -892,11 +945,12 @@ class GroupCoordinator(BaseCoordinator):
 
     @asyncio.coroutine
     def _do_rejoin_group(self, subscription):
+        T = self.traced_from_parent_span()
         rebalance = CoordinatorGroupRebalance(
             self, self.group_id, self.coordinator_id,
             subscription, self._assignors, self._session_timeout_ms,
             self._retry_backoff_ms, loop=self._loop)
-        assignment = yield from rebalance.perform_group_join()
+        assignment = yield from T(rebalance.perform_group_join)()
         if self._client.cluster.missing_autocreate_topics:
             raise MissingAutoCreateTopic(
                 "Need to rejoin! -- Topics not yet created: {0!r}".format(
@@ -910,12 +964,12 @@ class GroupCoordinator(BaseCoordinator):
             return False
         if assignment is None:
             # wait backoff and try again
-            yield from asyncio.sleep(
+            yield from T(asyncio.sleep)(
                 self._retry_backoff_ms / 1000, loop=self._loop)
             return False
 
         protocol, member_assignment_bytes = assignment
-        yield from self._on_join_complete(
+        yield from T(self._on_join_complete)(
             self.generation, self.member_id,
             protocol, member_assignment_bytes)
         return True

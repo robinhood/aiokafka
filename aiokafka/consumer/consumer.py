@@ -248,7 +248,10 @@ class AIOKafkaConsumer(object):
                  sasl_plain_password=None,
                  sasl_plain_username=None,
                  sasl_kerberos_service_name='kafka',
-                 sasl_kerberos_domain_name=None):
+                 sasl_kerberos_domain_name=None,
+                 traced_from_parent_span=None,
+                 start_rebalancing_span=None,
+                 start_coordinator_span=None):
         if max_poll_records is not None and (
                 not isinstance(max_poll_records, int) or max_poll_records < 1):
             raise ValueError("`max_poll_records` should be positive Integer")
@@ -292,6 +295,9 @@ class AIOKafkaConsumer(object):
         self._isolation_level = isolation_level
         self._rebalance_timeout_ms = rebalance_timeout_ms
         self._max_poll_interval_ms = max_poll_interval_ms
+        self._traced_from_parent_span = traced_from_parent_span
+        self._start_rebalancing_span = start_rebalancing_span
+        self._start_coordinator_span = start_coordinator_span
 
         self._check_crcs = check_crcs
         self._subscription = SubscriptionState(loop=loop)
@@ -378,7 +384,10 @@ class AIOKafkaConsumer(object):
                 assignors=self._partition_assignment_strategy,
                 exclude_internal_topics=self._exclude_internal_topics,
                 rebalance_timeout_ms=self._rebalance_timeout_ms,
-                max_poll_interval_ms=self._max_poll_interval_ms
+                max_poll_interval_ms=self._max_poll_interval_ms,
+                traced_from_parent_span=self._traced_from_parent_span,
+                start_rebalancing_span=self._start_rebalancing_span,
+                start_coordinator_span=self._start_coordinator_span,
             )
             if self._subscription.subscription is not None:
                 if self._subscription.partitions_auto_assigned():
