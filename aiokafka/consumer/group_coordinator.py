@@ -120,8 +120,7 @@ class NoGroupCoordinator(BaseCoordinator):
         if assignment is None or set(partitions) != assignment.tps:
             self._subscription.assign_from_subscribed(partitions)
 
-    @asyncio.coroutine
-    def _reset_committed_routine(self):
+    async def _reset_committed_routine(self):
         """ Group coordinator will reset committed points to UNKNOWN_OFFSET
         if no commit is found for group. In the NoGroup mode we need to force
         it after each assignment
@@ -130,12 +129,12 @@ class NoGroupCoordinator(BaseCoordinator):
         try:
             while True:
                 if self._subscription.subscription is None:
-                    yield from self._subscription.wait_for_subscription()
+                    await self._subscription.wait_for_subscription()
                     continue
 
                 assignment = self._subscription.subscription.assignment
                 if assignment is None:
-                    yield from self._subscription.wait_for_assignment()
+                    await self._subscription.wait_for_assignment()
                     continue
 
                 commit_refresh_needed = assignment.commit_refresh_needed
@@ -149,7 +148,7 @@ class NoGroupCoordinator(BaseCoordinator):
                 event_waiter = ensure_future(
                     commit_refresh_needed.wait(), loop=self._loop)
 
-                yield from asyncio.wait(
+                await asyncio.wait(
                     [assignment.unassign_future, event_waiter],
                     return_when=asyncio.FIRST_COMPLETED,
                     loop=self._loop)
@@ -167,10 +166,9 @@ class NoGroupCoordinator(BaseCoordinator):
     def _group_subscription(self):
         return self._subscription.subscription.topics
 
-    @asyncio.coroutine
-    def close(self):
+    async def close(self):
         self._reset_committed_task.cancel()
-        yield from self._reset_committed_task
+        await self._reset_committed_task
         self._reset_committed_task = None
 
     def check_errors(self):
@@ -306,8 +304,7 @@ class GroupCoordinator(BaseCoordinator):
     def _on_metadata_change(self):
         self.request_rejoin()
 
-    @asyncio.coroutine
-    def _send_req(self, request):
+    async def _send_req(self, request):
         """ Send request to coordinator node. In case the coordinator is not
         ready a respective error will be raised.
         """
@@ -315,7 +312,7 @@ class GroupCoordinator(BaseCoordinator):
         if node_id is None:
             raise Errors.GroupCoordinatorNotAvailableError()
         try:
-            resp = yield from self._client.send(
+            resp = await self._client.send(
                 node_id, request, group=ConnectionGroup.COORDINATION)
         except Errors.KafkaError as err:
             log.error(
@@ -364,8 +361,7 @@ class GroupCoordinator(BaseCoordinator):
         if not self._closing.done():
             self._closing.set_result(None)
 
-    @asyncio.coroutine
-    def close(self):
+    async def close(self):
         """Close the coordinator, leave the current group
         and reset local generation/memberId."""
         if self._closing.done():
@@ -374,25 +370,24 @@ class GroupCoordinator(BaseCoordinator):
         self._closing.set_result(None)
         # We must let the coordination task properly finish all pending work
         if not self._coordination_task.done():
-            yield from self._coordination_task
-        yield from self._stop_heartbeat_task()
-        yield from self._stop_commit_offsets_refresh_task()
+            await self._coordination_task
+        await self._stop_heartbeat_task()
+        await self._stop_commit_offsets_refresh_task()
 
-        yield from self._maybe_leave_group()
+        await self._maybe_leave_group()
 
     def maybe_leave_group(self):
         task = ensure_future(self._maybe_leave_group(), loop=self._loop)
         return task
 
-    @asyncio.coroutine
-    def _maybe_leave_group(self):
+    async def _maybe_leave_group(self):
         if self.generation > 0:
             # this is a minimal effort attempt to leave the group. we do not
             # attempt any resending if the request fails or times out.
             version = 0 if self._client.api_version < (0, 11, 0) else 1
             request = LeaveGroupRequest[version](self.group_id, self.member_id)
             try:
-                yield from self._send_req(request)
+                await self._send_req(request)
             except Errors.KafkaError as err:
                 log.error("LeaveGroup request failed: %s", err)
             else:
@@ -405,8 +400,7 @@ class GroupCoordinator(BaseCoordinator):
                 return assignor
         return None
 
-    @asyncio.coroutine
-    def _on_join_prepare(self, previous_assignment):
+    async def _on_join_prepare(self, previous_assignment):
         self._subscription.begin_reassignment()
         self._group_subscription = None
 
@@ -415,7 +409,7 @@ class GroupCoordinator(BaseCoordinator):
         # commit offsets prior to rebalance if auto-commit enabled
         if previous_assignment is not None:
             try:
-                yield from T(self._maybe_do_last_autocommit)(
+                await T(self._maybe_do_last_autocommit)(
                     previous_assignment)
             except Errors.KafkaError as err:
                 # We would retry any retriable commit already
@@ -429,21 +423,21 @@ class GroupCoordinator(BaseCoordinator):
                  revoked, self.group_id)
         if self._subscription.listener:
             try:
-                yield from T(self._on_partitions_revoked)(revoked)
+                await T(self._on_partitions_revoked)(revoked)
             except Exception:
                 log.exception("User provided subscription listener %s"
                               " for group %s failed on_partitions_revoked",
                               self._subscription.listener, self.group_id)
 
-    @asyncio.coroutine
-    def _on_partitions_revoked(self, revoked):
+    async def _on_partitions_revoked(self, revoked):
         res = self._subscription.listener.on_partitions_revoked(
             revoked)
         if asyncio.iscoroutine(res):
-            yield from res
+            await res
 
-    @asyncio.coroutine
-    def _perform_assignment(self, leader_id, assignment_strategy, members):
+    async def _perform_assignment(
+        self, leader_id, assignment_strategy, members
+    ):
         assignor = self._lookup_assignor(assignment_strategy)
         assert assignor, \
             'Invalid assignment protocol: %s' % assignment_strategy
@@ -462,7 +456,7 @@ class GroupCoordinator(BaseCoordinator):
             self._client.set_topics(self._group_subscription)
         # If somewhere we forced a metadata update (like in some `set_topics`
         # call) we should wait for it before performing assignment
-        yield from self._client._maybe_wait_metadata()
+        await self._client._maybe_wait_metadata()
 
         log.debug("Performing assignment for group %s using strategy %s"
                   " with subscriptions %s", self.group_id, assignor.name,
@@ -482,9 +476,10 @@ class GroupCoordinator(BaseCoordinator):
             group_assignment[member_id] = assignment
         return group_assignment
 
-    @asyncio.coroutine
-    def _on_join_complete(self, generation, member_id, protocol,
-                          member_assignment_bytes):
+    async def _on_join_complete(
+        self, generation, member_id, protocol,
+        member_assignment_bytes
+    ):
         T = self.traced_from_parent_span()
         assignor = self._lookup_assignor(protocol)
         assert assignor, 'invalid assignment protocol: %s' % protocol
@@ -502,7 +497,7 @@ class GroupCoordinator(BaseCoordinator):
         # We need to start this task before callback to avoid deadlocks.
         # Callback can rely on something like ``Consumer.position()`` that
         # requires committed point to be refreshed.
-        yield from T(self._stop_commit_offsets_refresh_task)()
+        await T(self._stop_commit_offsets_refresh_task)()
         self.start_commit_offsets_refresh_task(
             self._subscription.subscription.assignment)
 
@@ -513,19 +508,18 @@ class GroupCoordinator(BaseCoordinator):
         # execute the user's callback after rebalance
         if self._subscription.listener:
             try:
-                yield from T(self._on_partitions_assigned)(assigned)
+                await T(self._on_partitions_assigned)(assigned)
             except Exception:
                 log.exception("User provided listener %s for group %s"
                               " failed on partition assignment: %s",
                               self._subscription.listener, self.group_id,
                               assigned)
 
-    @asyncio.coroutine
-    def _on_partitions_assigned(self, assigned):
+    async def _on_partitions_assigned(self, assigned):
         res = self._subscription.listener.on_partitions_assigned(
             assigned)
         if asyncio.iscoroutine(res):
-            yield from res
+            await res
 
     def coordinator_dead(self):
         """ Mark the current coordinator as dead.
@@ -561,8 +555,7 @@ class GroupCoordinator(BaseCoordinator):
             subscription.assignment is None or self._rejoin_needed_fut.done()
         )
 
-    @asyncio.coroutine
-    def ensure_coordinator_known(self):
+    async def ensure_coordinator_known(self):
         """ Block until the coordinator for this group is known.
         """
         if self.coordinator_id is not None:
@@ -571,12 +564,12 @@ class GroupCoordinator(BaseCoordinator):
         with self.start_coordinator_span() as span:
             T = self.traced_from_parent_span(span)
 
-            with (yield from self._coordinator_lookup_lock):
+            async with self._coordinator_lookup_lock:
                 retry_backoff = self._retry_backoff_ms / 1000
                 while self.coordinator_id is None:
                     try:
                         coordinator_id = (
-                            yield from T(self._client.coordinator_lookup)(
+                            await T(self._client.coordinator_lookup)(
                                 CoordinationType.GROUP, self.group_id)
                         )
                     except Errors.GroupAuthorizationFailedError:
@@ -586,8 +579,8 @@ class GroupCoordinator(BaseCoordinator):
                     except Errors.KafkaError as err:
                         log.error("Group Coordinator Request failed: %s", err)
                         if err.retriable:
-                            yield from T(self._client.force_metadata_update)()
-                            yield from T(asyncio.sleep)(
+                            await T(self._client.force_metadata_update)()
+                            await T(asyncio.sleep)(
                                 retry_backoff, loop=self._loop)
                             continue
                         else:
@@ -595,10 +588,10 @@ class GroupCoordinator(BaseCoordinator):
 
                     # Try to connect to confirm that the connection can be
                     # established.
-                    ready = yield from T(self._client.ready)(
+                    ready = await T(self._client.ready)(
                         coordinator_id, group=ConnectionGroup.COORDINATION)
                     if not ready:
-                        yield from T(asyncio.sleep)(
+                        await T(asyncio.sleep)(
                             retry_backoff, loop=self._loop)
                         continue
 
@@ -607,10 +600,9 @@ class GroupCoordinator(BaseCoordinator):
                     log.info("Discovered coordinator %s for group %s",
                             self.coordinator_id, self.group_id)
 
-    @asyncio.coroutine
-    def _coordination_routine(self):
+    async def _coordination_routine(self):
         try:
-            yield from self.__coordination_routine()
+            await self.__coordination_routine()
         except asyncio.CancelledError:  # pragma: no cover
             raise
         except Exception as exc:
@@ -621,8 +613,7 @@ class GroupCoordinator(BaseCoordinator):
             self._subscription.abort_waiters(kafka_exc)
             raise kafka_exc
 
-    @asyncio.coroutine
-    def __coordination_routine(self):
+    async def __coordination_routine(self):
         """ Main background task, that keeps track of changes in group
         coordination. This task will spawn/stop heartbeat task and perform
         autocommit in times it's safe to do so.
@@ -641,7 +632,7 @@ class GroupCoordinator(BaseCoordinator):
                     self.request_rejoin()
                     subscription = self._subscription.subscription
                 if subscription is None:
-                    yield from asyncio.wait(
+                    await asyncio.wait(
                         [self._subscription.wait_for_subscription(),
                         self._closing],
                         return_when=asyncio.FIRST_COMPLETED, loop=self._loop)
@@ -653,9 +644,9 @@ class GroupCoordinator(BaseCoordinator):
 
                 # Ensure active group
                 try:
-                    yield from self.ensure_coordinator_known()
+                    await self.ensure_coordinator_known()
                     if auto_assigned and self.need_rejoin(subscription):
-                        new_assignment = yield from self.ensure_active_group(
+                        new_assignment = await self.ensure_active_group(
                             subscription, assignment)
                         if new_assignment is None:
                             continue
@@ -671,11 +662,10 @@ class GroupCoordinator(BaseCoordinator):
                     # In success case time to next autocommit deadline.
                     # If autocommit is disabled timeout will be ``None``,
                     # ie. no timeout.
-                    wait_timeout = yield from self._maybe_do_autocommit(
-                        assignment)
+                    wait_timeout = await self._maybe_do_autocommit(assignment)
 
                 except Errors.KafkaError as exc:
-                    yield from self._push_error_to_user(exc)
+                    await self._push_error_to_user(exc)
                     continue
 
                 futures = [
@@ -697,14 +687,14 @@ class GroupCoordinator(BaseCoordinator):
                 if self._commit_refresh_task:
                     futures.append(self._commit_refresh_task)
 
-                done, _ = yield from asyncio.wait(
+                done, _ = await asyncio.wait(
                     futures, timeout=wait_timeout, loop=self._loop,
                     return_when=asyncio.FIRST_COMPLETED)
             except asyncio.CancelledError:
                 pass
             except MissingAutoCreateTopic as exc:
                 log.error("Rejoining group -- %s", exc)
-                yield from self._client.force_metadata_update()
+                await self._client.force_metadata_update()
                 self.request_rejoin()
             except Exception as exc:
                 log.error('CRASHING HARD: COORDINATION ROUTINE GOT %r',
@@ -716,18 +706,17 @@ class GroupCoordinator(BaseCoordinator):
                 if task and task.done():
                     exc = task.exception()
                     if exc:
-                        yield from self._push_error_to_user(exc)
+                        await self._push_error_to_user(exc)
 
         # Closing finallization
         if assignment is not None:
             try:
-                yield from self._maybe_do_last_autocommit(assignment)
+                await self._maybe_do_last_autocommit(assignment)
             except Errors.KafkaError as err:
                 # We did all we could, all we can is show this to user
                 log.error("Failed to commit on finallization: %s", err)
 
-    @asyncio.coroutine
-    def ensure_active_group(self, subscription, prev_assignment):
+    async def ensure_active_group(self, subscription, prev_assignment):
         # due to a race condition between the initial metadata
         # fetch and the initial rebalance, we need to ensure that
         # the metadata is fresh before joining initially. This
@@ -739,26 +728,26 @@ class GroupCoordinator(BaseCoordinator):
         with self.start_rebalancing_span() as span:
             T = self.traced_from_parent_span(span)
             if self._subscription.subscribed_pattern:
-                yield from T(self._client.force_metadata_update)()
+                await T(self._client.force_metadata_update)()
                 if not subscription.active:
                     return None
 
             if not self._performed_join_prepare:
                 # NOTE: We pass the previously used assignment here.
 
-                yield from T(self._on_join_prepare)(prev_assignment)
+                await T(self._on_join_prepare)(prev_assignment)
                 self._performed_join_prepare = True
 
             # NOTE: we did not stop heartbeat task before to keep the
             # member alive during the callback, as it can commit offsets.
             # See the ``RebalanceInProgressError`` case in heartbeat
             # handling.
-            yield from T(self._stop_heartbeat_task)()
+            await T(self._stop_heartbeat_task)()
 
             # We will not attempt rejoin if there is no activity on consumer
             idle_time = self._subscription.fetcher_idle_time
             if idle_time >= self._max_poll_interval:
-                yield from T(asyncio.sleep)(self._retry_backoff_ms / 1000)
+                await T(asyncio.sleep)(self._retry_backoff_ms / 1000)
                 return None
 
             # We will only try to perform the rejoin once. If it fails,
@@ -768,7 +757,7 @@ class GroupCoordinator(BaseCoordinator):
             # subscription change and coordinator failure by itself and
             # this way we don't need to worry about racing or cancellation
             # issues that could occur if re-join were to be a task.
-            success = yield from T(self._do_rejoin_group)(subscription)
+            success = await T(self._do_rejoin_group)(subscription)
             if success:
                 self._performed_join_prepare = False
                 self._start_heartbeat_task()
@@ -780,16 +769,14 @@ class GroupCoordinator(BaseCoordinator):
             self._heartbeat_task = ensure_future(
                 self._heartbeat_routine(), loop=self._loop)
 
-    @asyncio.coroutine
-    def _stop_heartbeat_task(self):
+    async def _stop_heartbeat_task(self):
         if self._heartbeat_task is not None:
             if not self._heartbeat_task.done():
                 self._heartbeat_task.cancel()
-                yield from self._heartbeat_task
+                await self._heartbeat_task
             self._heartbeat_task = None
 
-    @asyncio.coroutine
-    def _heartbeat_routine(self):
+    async def _heartbeat_routine(self):
         last_ok_heartbeat = self._loop.time()
         hb_interval = self._heartbeat_interval_ms / 1000
         session_timeout = self._session_timeout_ms / 1000
@@ -800,11 +787,11 @@ class GroupCoordinator(BaseCoordinator):
         # this consumer, so we stop after resetting generation.
         while self.member_id != JoinGroupRequest[0].UNKNOWN_MEMBER_ID:
             try:
-                yield from asyncio.sleep(sleep_time, loop=self._loop)
-                yield from self.ensure_coordinator_known()
+                await asyncio.sleep(sleep_time, loop=self._loop)
+                await self.ensure_coordinator_known()
 
                 t0 = self._loop.time()
-                success = yield from self._do_heartbeat()
+                success = await self._do_heartbeat()
             except asyncio.CancelledError:
                 break
 
@@ -828,8 +815,7 @@ class GroupCoordinator(BaseCoordinator):
 
         log.debug("Stopping heartbeat task")
 
-    @asyncio.coroutine
-    def _do_heartbeat(self):
+    async def _do_heartbeat(self):
         version = 0 if self._client.api_version < (0, 11, 0) else 1
         request = HeartbeatRequest[version](
             self.group_id, self.generation, self.member_id)
@@ -839,7 +825,7 @@ class GroupCoordinator(BaseCoordinator):
         # _send_req may fail with error like `RequestTimedOutError`
         # we need to catch it so coordinator_routine won't fail
         try:
-            resp = yield from self._send_req(request)
+            resp = await self._send_req(request)
         except Errors.KafkaError as err:
             log.error("Heartbeat send request failed: %s. Will retry.", err)
             return False
@@ -894,17 +880,15 @@ class GroupCoordinator(BaseCoordinator):
         self._commit_refresh_task = ensure_future(
             self._commit_refresh_routine(assignment), loop=self._loop)
 
-    @asyncio.coroutine
-    def _stop_commit_offsets_refresh_task(self):
+    async def _stop_commit_offsets_refresh_task(self):
         # The previous task should end after assinment changed
         if self._commit_refresh_task is not None:
             if not self._commit_refresh_task.done():
                 self._commit_refresh_task.cancel()
-                yield from self._commit_refresh_task
+                await self._commit_refresh_task
             self._commit_refresh_task = None
 
-    @asyncio.coroutine
-    def _commit_refresh_routine(self, assignment):
+    async def _commit_refresh_routine(self, assignment):
         """ Task that will do a commit cache refresh if someone is waiting for
         it.
         """
@@ -914,7 +898,7 @@ class GroupCoordinator(BaseCoordinator):
         try:
             while assignment.active:
                 commit_refresh_needed.clear()
-                success = yield from self._maybe_refresh_commit_offsets(
+                success = await self._maybe_refresh_commit_offsets(
                     assignment)
 
                 wait_futures = [assignment.unassign_future]
@@ -926,7 +910,7 @@ class GroupCoordinator(BaseCoordinator):
                         commit_refresh_needed.wait(), loop=self._loop)
                     wait_futures.append(event_waiter)
 
-                yield from asyncio.wait(
+                await asyncio.wait(
                     wait_futures,
                     timeout=timeout,
                     return_when=asyncio.FIRST_COMPLETED,
@@ -944,14 +928,13 @@ class GroupCoordinator(BaseCoordinator):
             event_waiter.cancel()
             event_waiter = None
 
-    @asyncio.coroutine
-    def _do_rejoin_group(self, subscription):
+    async def _do_rejoin_group(self, subscription):
         T = self.traced_from_parent_span()
         rebalance = CoordinatorGroupRebalance(
             self, self.group_id, self.coordinator_id,
             subscription, self._assignors, self._session_timeout_ms,
             self._retry_backoff_ms, loop=self._loop)
-        assignment = yield from T(rebalance.perform_group_join)()
+        assignment = await T(rebalance.perform_group_join)()
         if self._client.cluster.missing_autocreate_topics:
             raise MissingAutoCreateTopic(
                 "Need to rejoin! -- Topics not yet created: {0!r}".format(
@@ -965,18 +948,17 @@ class GroupCoordinator(BaseCoordinator):
             return False
         if assignment is None:
             # wait backoff and try again
-            yield from T(asyncio.sleep)(
+            await T(asyncio.sleep)(
                 self._retry_backoff_ms / 1000, loop=self._loop)
             return False
 
         protocol, member_assignment_bytes = assignment
-        yield from T(self._on_join_complete)(
+        await T(self._on_join_complete)(
             self.generation, self.member_id,
             protocol, member_assignment_bytes)
         return True
 
-    @asyncio.coroutine
-    def _maybe_do_autocommit(self, assignment):
+    async def _maybe_do_autocommit(self, assignment):
         if not self._enable_auto_commit:
             return None
         now = self._loop.time()
@@ -984,8 +966,8 @@ class GroupCoordinator(BaseCoordinator):
         backoff = self._retry_backoff_ms / 1000
         if now > self._next_autocommit_deadline:
             try:
-                with (yield from self._commit_lock):
-                    yield from self._do_commit_offsets(
+                async with self._commit_lock:
+                    await self._do_commit_offsets(
                         assignment, assignment.all_consumed_offsets())
             except Errors.KafkaError as error:
                 log.warning("Auto offset commit failed: %s", error)
@@ -1002,15 +984,13 @@ class GroupCoordinator(BaseCoordinator):
 
         return max(0, self._next_autocommit_deadline - self._loop.time())
 
-    @asyncio.coroutine
-    def _maybe_do_last_autocommit(self, assignment):
+    async def _maybe_do_last_autocommit(self, assignment):
         if not self._enable_auto_commit:
             return
-        yield from self.commit_offsets(
+        await self.commit_offsets(
             assignment, assignment.all_consumed_offsets())
 
-    @asyncio.coroutine
-    def commit_offsets(self, assignment, offsets):
+    async def commit_offsets(self, assignment, offsets):
         """Commit specific offsets
 
         Arguments:
@@ -1019,10 +999,10 @@ class GroupCoordinator(BaseCoordinator):
         Raises KafkaError on failure
         """
         while True:
-            yield from self.ensure_coordinator_known()
+            await self.ensure_coordinator_known()
             try:
-                with (yield from self._commit_lock):
-                    yield from asyncio.shield(
+                async with self._commit_lock:
+                    await asyncio.shield(
                         self._do_commit_offsets(assignment, offsets),
                         loop=self._loop)
             except (Errors.UnknownMemberIdError,
@@ -1037,13 +1017,12 @@ class GroupCoordinator(BaseCoordinator):
                     raise err
                 else:
                     # wait backoff and try again
-                    yield from asyncio.sleep(
+                    await asyncio.sleep(
                         self._retry_backoff_ms / 1000, loop=self._loop)
             else:
                 break
 
-    @asyncio.coroutine
-    def _do_commit_offsets(self, assignment, offsets):
+    async def _do_commit_offsets(self, assignment, offsets):
         # Fast return if nothing to commit
         if not offsets:
             return
@@ -1067,7 +1046,7 @@ class GroupCoordinator(BaseCoordinator):
         log.debug("Sending offset-commit request with %s for group %s to %s",
                   offsets, self.group_id, self.coordinator_id)
 
-        response = yield from self._send_req(request)
+        response = await self._send_req(request)
 
         errored = collections.OrderedDict()
         unauthorized_topics = set()
@@ -1139,12 +1118,11 @@ class GroupCoordinator(BaseCoordinator):
                       unauthorized_topics)
             raise Errors.TopicAuthorizationFailedError(unauthorized_topics)
 
-    @asyncio.coroutine
-    def _maybe_refresh_commit_offsets(self, assignment):
+    async def _maybe_refresh_commit_offsets(self, assignment):
         need_update = assignment.requesting_committed()
         if need_update:
             try:
-                offsets = yield from self._do_fetch_commit_offsets(
+                offsets = await self._do_fetch_commit_offsets(
                     need_update)
             except Errors.KafkaError as err:
                 if not err.retriable:
@@ -1161,8 +1139,7 @@ class GroupCoordinator(BaseCoordinator):
                         OffsetAndMetadata(UNKNOWN_OFFSET, ""))
         return True
 
-    @asyncio.coroutine
-    def fetch_committed_offsets(self, partitions):
+    async def fetch_committed_offsets(self, partitions):
         """Fetch the current committed offsets for specified partitions
 
         Arguments:
@@ -1175,21 +1152,20 @@ class GroupCoordinator(BaseCoordinator):
             return {}
 
         while True:
-            yield from self.ensure_coordinator_known()
+            await self.ensure_coordinator_known()
             try:
-                offsets = yield from self._do_fetch_commit_offsets(partitions)
+                offsets = await self._do_fetch_commit_offsets(partitions)
             except Errors.KafkaError as err:
                 if not err.retriable:
                     raise err
                 else:
                     # wait backoff and try again
-                    yield from asyncio.sleep(
+                    await asyncio.sleep(
                         self._retry_backoff_ms / 1000, loop=self._loop)
             else:
                 return offsets
 
-    @asyncio.coroutine
-    def _do_fetch_commit_offsets(self, partitions):
+    async def _do_fetch_commit_offsets(self, partitions):
         log.debug("Fetching committed offsets for partitions: %s", partitions)
         # construct the request
         topic_partitions = collections.defaultdict(list)
@@ -1200,7 +1176,7 @@ class GroupCoordinator(BaseCoordinator):
             self.group_id,
             list(topic_partitions.items())
         )
-        response = yield from self._send_req(request)
+        response = await self._send_req(request)
         offsets = {}
         for topic, partitions in response.topics:
             for partition, offset, metadata, error_code in partitions:
@@ -1258,8 +1234,7 @@ class CoordinatorGroupRebalance:
         self._api_version = self._coordinator._client.api_version
         self._rebalance_timeout_ms = self._coordinator._rebalance_timeout_ms
 
-    @asyncio.coroutine
-    def perform_group_join(self):
+    async def perform_group_join(self):
         """Join the group and return the assignment for the next generation.
 
         This function handles both JoinGroup and SyncGroup, delegating to
@@ -1307,7 +1282,7 @@ class CoordinatorGroupRebalance:
         log.debug("Sending JoinGroup (%s) to coordinator %s",
                   request, self.coordinator_id)
         try:
-            response = yield from self._coordinator._send_req(request)
+            response = await self._coordinator._send_req(request)
         except Errors.KafkaError:
             # Return right away. It's a connection error, so backoff will be
             # handled by coordinator lookup
@@ -1329,9 +1304,9 @@ class CoordinatorGroupRebalance:
             if response.leader_id == response.member_id:
                 log.info("Elected group leader -- performing partition"
                          " assignments using %s", protocol)
-                assignment_bytes = yield from self._on_join_leader(response)
+                assignment_bytes = await self._on_join_leader(response)
             else:
-                assignment_bytes = yield from self._on_join_follower()
+                assignment_bytes = await self._on_join_follower()
 
             if assignment_bytes is None:
                 return None
@@ -1341,7 +1316,7 @@ class CoordinatorGroupRebalance:
             log.debug("Attempt to join group %s rejected since coordinator %s"
                       " is loading the group.", self.group_id,
                       self.coordinator_id)
-            yield from asyncio.sleep(
+            await asyncio.sleep(
                 self._retry_backoff_ms / 1000, loop=self._loop)
         elif error_type is Errors.UnknownMemberIdError:
             # reset the member id and retry immediately
@@ -1375,8 +1350,7 @@ class CoordinatorGroupRebalance:
 
         return None
 
-    @asyncio.coroutine
-    def _on_join_follower(self):
+    async def _on_join_follower(self):
         # send follower's sync group with an empty assignment
         version = 0 if self._api_version < (0, 11, 0) else 1
         request = SyncGroupRequest[version](
@@ -1387,10 +1361,9 @@ class CoordinatorGroupRebalance:
         log.debug(
             "Sending follower SyncGroup for group %s to coordinator %s: %s",
             self.group_id, self.coordinator_id, request)
-        return (yield from self._send_sync_group_request(request))
+        return (await self._send_sync_group_request(request))
 
-    @asyncio.coroutine
-    def _on_join_leader(self, response):
+    async def _on_join_leader(self, response):
         """
         Perform leader synchronization and send back the assignment
         for the group via SyncGroupRequest
@@ -1403,7 +1376,7 @@ class CoordinatorGroupRebalance:
         """
         try:
             group_assignment = \
-                yield from self._coordinator._perform_assignment(
+                await self._coordinator._perform_assignment(
                     response.leader_id,
                     response.group_protocol,
                     response.members)
@@ -1426,17 +1399,16 @@ class CoordinatorGroupRebalance:
         log.debug(
             "Sending leader SyncGroup for group %s to coordinator %s: %s",
             self.group_id, self.coordinator_id, request)
-        return (yield from self._send_sync_group_request(request))
+        return (await self._send_sync_group_request(request))
 
-    @asyncio.coroutine
-    def _send_sync_group_request(self, request):
+    async def _send_sync_group_request(self, request):
         # We need to reset the rejoin future right after the assignment to
         # capture metadata changes after join group was performed. We do not
         # set it directly after JoinGroup to avoid a false rejoin in case
         # ``_perform_assignment()`` does a metadata update.
         self._coordinator._rejoin_needed_fut = create_future(loop=self._loop)
         try:
-            response = yield from self._coordinator._send_req(request)
+            response = await self._coordinator._send_req(request)
         except Errors.KafkaError:
             # We lost connection to coordinator. No need to try and finish this
             # group join, just rejoin again.

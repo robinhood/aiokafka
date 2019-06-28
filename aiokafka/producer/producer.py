@@ -15,7 +15,7 @@ from aiokafka.errors import (
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import TopicPartition
 from aiokafka.util import (
-    INTEGER_MAX_VALUE, PY_341, PY_36, commit_structure_validate,
+    INTEGER_MAX_VALUE, PY_36, commit_structure_validate,
 )
 
 from .message_accumulator import MessageAccumulator
@@ -124,23 +124,22 @@ class BaseProducer(abc.ABC):
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
         self._closed = False
 
-    if PY_341:
-        # Warn if producer was not closed properly
-        # We don't attempt to close the Consumer, as __del__ is synchronous
-        def __del__(self, _warnings=warnings):
-            if self._closed is False:
-                if PY_36:
-                    kwargs = {'source': self}
-                else:
-                    kwargs = {}
-                _warnings.warn("Unclosed AIOKafkaProducer {!r}".format(self),
-                               ResourceWarning,
-                               **kwargs)
-                context = {'producer': self,
-                           'message': 'Unclosed AIOKafkaProducer'}
-                if self._source_traceback is not None:
-                    context['source_traceback'] = self._source_traceback
-                self._loop.call_exception_handler(context)
+    # Warn if producer was not closed properly
+    # We don't attempt to close the Consumer, as __del__ is synchronous
+    def __del__(self, _warnings=warnings):
+        if self._closed is False:
+            if PY_36:
+                kwargs = {'source': self}
+            else:
+                kwargs = {}
+            _warnings.warn("Unclosed AIOKafkaProducer {!r}".format(self),
+                           ResourceWarning,
+                           **kwargs)
+            context = {'producer': self,
+                       'message': 'Unclosed AIOKafkaProducer'}
+            if self._source_traceback is not None:
+                context['source_traceback'] = self._source_traceback
+            self._loop.call_exception_handler(context)
 
     @abc.abstractmethod
     def _on_set_api_version(self, api_version):
@@ -166,17 +165,16 @@ class BaseProducer(abc.ABC):
     def _ensure_transactional(self):
         ...
 
-    @asyncio.coroutine
-    def start(self):
+    async def start(self):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
-        yield from self.client.bootstrap()
+        await self.client.bootstrap()
         if self._closed:
             return
         api_version = self.client.api_version
 
         self._verify_api_version(api_version)
-        yield from self._start_sender()
+        await self._start_sender()
         self._on_set_api_version(api_version)
 
         self._producer_magic = 0 if api_version < (0, 10) else 1
@@ -187,23 +185,21 @@ class BaseProducer(abc.ABC):
             assert self.client.api_version >= (0, 8, 2), \
                 'LZ4 Requires >= Kafka 0.8.2 Brokers'
 
-    @asyncio.coroutine
-    def stop(self):
+    async def stop(self):
         """Flush all pending data and close all connections to kafka cluster"""
         if self._closed:
             return
         self._closed = True
         self.client.set_close()
 
-        yield from self._wait_for_sender()
+        await self._wait_for_sender()
 
-        yield from self.client.close()
+        await self.client.close()
         log.debug("The Kafka producer has closed.")
 
-    @asyncio.coroutine
-    def partitions_for(self, topic):
+    async def partitions_for(self, topic):
         """Returns set of all known partitions for the topic."""
-        return (yield from self.client._wait_on_metadata(topic))
+        return (await self.client._wait_on_metadata(topic))
 
     def _serialize(self, topic, key, value):
         if self._key_serializer:
@@ -242,9 +238,10 @@ class BaseProducer(abc.ABC):
         return self._partitioner(
             serialized_key, all_partitions, available)
 
-    @asyncio.coroutine
-    def send(self, topic, value=None, key=None, partition=None,
-             timestamp_ms=None, headers=None, transactional_id=None):
+    async def send(
+        self, topic, value=None, key=None, partition=None,
+        timestamp_ms=None, headers=None, transactional_id=None
+    ):
         """Publish a message to a topic.
 
         Arguments:
@@ -290,7 +287,7 @@ class BaseProducer(abc.ABC):
         transactional_id = self._transactional_id_or_default(transactional_id)
 
         # first make sure the metadata for the topic is available
-        yield from self.client._wait_on_metadata(topic)
+        await self.client._wait_on_metadata(topic)
 
         # Ensure transaction is started and not committing
         self._verify_txn_started(transactional_id)
@@ -312,18 +309,17 @@ class BaseProducer(abc.ABC):
 
         message_accumulator = self._message_accumulator_for(
             transactional_id, tp)
-        fut = yield from message_accumulator.add_message(
+        fut = await message_accumulator.add_message(
             tp, key_bytes, value_bytes, self._request_timeout_ms / 1000,
             timestamp_ms=timestamp_ms, headers=headers)
         return fut
 
-    @asyncio.coroutine
-    def send_and_wait(self, topic, value=None, key=None, partition=None,
+    async def send_and_wait(self, topic, value=None, key=None, partition=None,
                       timestamp_ms=None):
         """Publish a message to a topic and wait the result"""
-        future = yield from self.send(
+        future = await self.send(
             topic, value, key, partition, timestamp_ms)
-        return (yield from future)
+        return (await future)
 
 
 class AIOKafkaProducer(BaseProducer):
@@ -536,21 +532,19 @@ class AIOKafkaProducer(BaseProducer):
                 "Idempotent producer available only for Broker version 0.11"
                 " and above")
 
-    @asyncio.coroutine
-    def flush(self):
+    async def flush(self):
         """Wait untill all batches are Delivered and futures resolved"""
-        yield from self._message_accumulator.flush()
+        await self._message_accumulator.flush()
 
-    @asyncio.coroutine
-    def _wait_for_sender(self):
+    async def _wait_for_sender(self):
         # If the sender task is down there is no way for accumulator to flush
         if self._sender is not None and self._sender.sender_task is not None:
-            yield from asyncio.wait([
+            await asyncio.wait([
                 self._message_accumulator.close(),
                 self._sender.sender_task],
                 return_when=asyncio.FIRST_COMPLETED,
                 loop=self._loop)
-        yield from self._sender.close()
+        await self._sender.close()
 
     def _ensure_transactional(self):
         if self._txn_manager is None or \
@@ -558,42 +552,38 @@ class AIOKafkaProducer(BaseProducer):
             raise IllegalOperation(
                 "You need to configure transaction_id to use transactions")
 
-    @asyncio.coroutine
-    def _start_sender(self):
-        yield from self._sender.start()
+    async def _start_sender(self):
+        await self._sender.start()
 
-    @asyncio.coroutine
-    def begin_transaction(self):
+    async def begin_transaction(self):
         self._ensure_transactional()
         log.debug(
             "Beginning a new transaction for id %s",
             self._txn_manager.transactional_id)
-        yield from asyncio.shield(
+        await asyncio.shield(
             self._txn_manager.wait_for_pid(),
             loop=self._loop,
         )
         self._txn_manager.begin_transaction()
 
-    @asyncio.coroutine
-    def commit_transaction(self):
+    async def commit_transaction(self):
         self._ensure_transactional()
         log.debug(
             "Committing transaction for id %s",
             self._txn_manager.transactional_id)
         self._txn_manager.committing_transaction()
-        yield from asyncio.shield(
+        await asyncio.shield(
             self._txn_manager.wait_for_transaction_end(),
             loop=self._loop,
         )
 
-    @asyncio.coroutine
-    def abort_transaction(self):
+    async def abort_transaction(self):
         self._ensure_transactional()
         log.debug(
             "Aborting transaction for id %s",
             self._txn_manager.transactional_id)
         self._txn_manager.aborting_transaction()
-        yield from asyncio.shield(
+        await asyncio.shield(
             self._txn_manager.wait_for_transaction_end(),
             loop=self._loop,
         )
@@ -601,8 +591,7 @@ class AIOKafkaProducer(BaseProducer):
     def transaction(self):
         return TransactionContext(self)
 
-    @asyncio.coroutine
-    def send_offsets_to_transaction(self, offsets, group_id):
+    async def send_offsets_to_transaction(self, offsets, group_id):
         self._ensure_transactional()
 
         if not self._txn_manager.is_in_transaction():
@@ -618,7 +607,7 @@ class AIOKafkaProducer(BaseProducer):
             "Begin adding offsets %s for consumer group %s to transaction",
             formatted_offsets, group_id)
         fut = self._txn_manager.add_offsets_to_txn(formatted_offsets, group_id)
-        yield from asyncio.shield(fut, loop=self._loop)
+        await asyncio.shield(fut, loop=self._loop)
 
     def create_batch(self):
         """Create and return an empty BatchBuilder.
@@ -630,8 +619,7 @@ class AIOKafkaProducer(BaseProducer):
         """
         return self._message_accumulator.create_builder()
 
-    @asyncio.coroutine
-    def send_batch(self, batch, topic, *, partition):
+    async def send_batch(self, batch, topic, *, partition):
         """Submit a BatchBuilder for publication.
 
         Arguments:
@@ -644,7 +632,7 @@ class AIOKafkaProducer(BaseProducer):
                 delivered.
         """
         # first make sure the metadata for the topic is available
-        yield from self.client._wait_on_metadata(topic)
+        await self.client._wait_on_metadata(topic)
         # We only validate we have the partition in the metadata here
         partition = self._partition(topic, partition, None, None, None, None)
 
@@ -658,7 +646,7 @@ class AIOKafkaProducer(BaseProducer):
 
         tp = TopicPartition(topic, partition)
         log.debug("Sending batch to %s", tp)
-        future = yield from self._message_accumulator.add_batch(
+        future = await self._message_accumulator.add_batch(
             batch, tp, self._request_timeout_ms / 1000)
         return future
 
@@ -668,21 +656,19 @@ class TransactionContext:
     def __init__(self, producer):
         self._producer = producer
 
-    @asyncio.coroutine
-    def __aenter__(self):
-        yield from self._producer.begin_transaction()
+    async def __aenter__(self):
+        await self._producer.begin_transaction()
         return self
 
-    @asyncio.coroutine
-    def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         if exc_type is not None:
             # If called directly we want the API to raise a InvalidState error,
             # but when exiting a context manager we should just let it out.
             if self._producer._txn_manager.is_fatal_error():
                 return
-            yield from self._producer.abort_transaction()
+            await self._producer.abort_transaction()
         else:
-            yield from self._producer.commit_transaction()
+            await self._producer.commit_transaction()
 
 
 class MultiTXNProducer(BaseProducer):
@@ -736,33 +722,35 @@ class MultiTXNProducer(BaseProducer):
             loop=self._loop,
         )
 
-    @asyncio.coroutine
-    def commit(self,
-               tid_to_offset_map: Mapping[str, Mapping[TopicPartition, int]],
-               group_id: str,
-               start_new_transaction: bool = True) -> None:
+    async def commit(
+        self,
+        tid_to_offset_map: Mapping[str, Mapping[TopicPartition, int]],
+        group_id: str,
+        start_new_transaction: bool = True
+    ) -> None:
         for transactional_id, offsets in tid_to_offset_map.items():
             log.debug('+COMMIT %r %r' % (transactional_id, offsets))
-            yield from self._commit(
+            await self._commit(
                 transactional_id, offsets, group_id,
                 start_new_transaction=start_new_transaction,
             )
             log.debug('-COMMIT %r %r' % (transactional_id, offsets))
 
-    @asyncio.coroutine
-    def _commit(self, transactional_id, offsets: Mapping[TopicPartition, int],
-                group_id: str,
-                start_new_transaction: bool = True) -> None:
+    async def _commit(
+        self, transactional_id, offsets: Mapping[TopicPartition, int],
+        group_id: str,
+        start_new_transaction: bool = True
+    ) -> None:
         log.debug('+send offsets to transaction %r' % (transactional_id,))
-        yield from self.send_offsets_to_transaction(
+        await self.send_offsets_to_transaction(
             transactional_id, offsets, group_id)
         log.debug('-send offsets to transaction %r' % (transactional_id,))
         log.debug('+commit transaction %r' % (transactional_id,))
-        yield from self.commit_transaction(transactional_id)
+        await self.commit_transaction(transactional_id)
         log.debug('-commit transaction %r' % (transactional_id,))
         if start_new_transaction:
             log.debug('+start new transaction %r' % (transactional_id,))
-            yield from self.begin_transaction(transactional_id)
+            await self.begin_transaction(transactional_id)
             log.debug('-start new transaction %r' % (transactional_id,))
 
     def _on_set_api_version(self, api_version):
@@ -797,47 +785,42 @@ class MultiTXNProducer(BaseProducer):
                 "MultiTXNProducer available only for Broker version 0.11"
                 " and above")
 
-    @asyncio.coroutine
-    def flush(self):
+    async def flush(self):
         """Wait untill all batches are Delivered and futures resolved"""
-        yield from asyncio.gather(
+        await asyncio.gather(
             self._message_accumulator.flush(),
             *[acc.flush() for acc in self._accumulators.values()],
         )
 
-    @asyncio.coroutine
-    def _wait_for_sender(self):
+    async def _wait_for_sender(self):
         senders = self._senders
         accumulators = self._accumulators
-        yield from asyncio.gather(
+        await asyncio.gather(
             self._wait_for_sender1(self._sender, self._message_accumulator),
             *[self._wait_for_sender1(senders[transactional_id], accumulator)
               for transactional_id, accumulator in accumulators.items()],
         )
 
-    @asyncio.coroutine
-    def _wait_for_sender1(self, sender, accumulator):
+    async def _wait_for_sender1(self, sender, accumulator):
         # If the sender task is down there is no way for accumulator to flush
         if sender is not None:
             if sender.sender_task is not None:
                 futs = [sender.sender_task]
                 if accumulator is not None:
                     futs.append(accumulator.close())
-                yield from asyncio.wait(
+                await asyncio.wait(
                     futs,
                     return_when=asyncio.FIRST_COMPLETED,
                     loop=self._loop)
-            yield from sender.close()
+            await sender.close()
 
     def _ensure_transactional(self):
         ...
 
-    @asyncio.coroutine
-    def _start_sender(self):
-        yield from self._sender.start()
+    async def _start_sender(self):
+        await self._sender.start()
 
-    @asyncio.coroutine
-    def _init_transaction(self, tid):
+    async def _init_transaction(self, tid):
         txn_manager = self._transactions[tid] = TransactionManager(
             tid, self._transaction_timeout_ms, loop=self._loop,
         )
@@ -861,77 +844,73 @@ class MultiTXNProducer(BaseProducer):
             on_irrecoverable_error=self._on_irrecoverable_error,
             loop=self._loop,
         )
-        yield from sender.start()
+        await sender.start()
         return txn_manager
 
-    @asyncio.coroutine
-    def begin_transaction(self, transactional_id):
+    async def begin_transaction(self, transactional_id):
         log.debug(
             "Beginning a new transaction for id %s", transactional_id)
         txn_manager = self._transactions.get(transactional_id)
         if txn_manager is None:
-            txn_manager = yield from self._init_transaction(transactional_id)
+            txn_manager = await self._init_transaction(transactional_id)
 
-        yield from asyncio.shield(
+        await asyncio.shield(
             txn_manager.wait_for_pid(),
             loop=self._loop,
         )
         txn_manager.begin_transaction()
 
-    @asyncio.coroutine
-    def commit_transaction(self, transactional_id):
+    async def commit_transaction(self, transactional_id):
         log.debug(
             "Committing transaction for id %s", transactional_id)
         txn_manager = self._transactions[transactional_id]
         txn_manager.committing_transaction()
-        yield from asyncio.shield(
+        await asyncio.shield(
             txn_manager.wait_for_transaction_end(),
             loop=self._loop,
         )
 
-    @asyncio.coroutine
-    def abort_transaction(self, transactional_id):
+    async def abort_transaction(self, transactional_id):
         log.debug(
             "Aborting transaction for id %s", transactional_id)
         txn_manager = self._transactions[transactional_id]
         txn_manager.aborting_transaction()
-        yield from asyncio.shield(
+        await asyncio.shield(
             txn_manager.wait_for_transaction_end(),
             loop=self._loop,
         )
 
-    @asyncio.coroutine
-    def stop_transaction(self, transactional_id):
+    async def stop_transaction(self, transactional_id):
         txn_manager = self._transactions.pop(transactional_id, None)
         accumulator = self._accumulators.pop(transactional_id, None)
         sender = self._senders.pop(transactional_id, None)
         if txn_manager is not None:
             if txn_manager.is_in_transaction():
                 txn_manager.aborting_transaction()
-                yield from asyncio.shield(
+                await asyncio.shield(
                     txn_manager.wait_for_transaction_end(),
                     loop=self._loop,
                 )
-        yield from self._wait_for_sender1(sender, accumulator)
+        await self._wait_for_sender1(sender, accumulator)
 
-    @asyncio.coroutine
-    def maybe_begin_transaction(self, transactional_id):
+    async def maybe_begin_transaction(self, transactional_id):
         txn_manager = self._transactions.get(transactional_id)
         if txn_manager is None:
-            txn_manager = yield from self._init_transaction(transactional_id)
+            txn_manager = await self._init_transaction(transactional_id)
         else:
             if txn_manager.is_in_transaction():
                 return
         log.debug(
             "Beginning a new transaction for id %s", transactional_id)
-        yield from asyncio.shield(
+        await asyncio.shield(
             txn_manager.wait_for_pid(),
             loop=self._loop,
         )
         txn_manager.begin_transaction()
 
-    @asyncio.coroutine
-    def send_offsets_to_transaction(self, transactional_id, offsets, group_id):
+    async def send_offsets_to_transaction(
+        self, transactional_id, offsets, group_id
+    ):
         txn_manager = self._transactions[transactional_id]
         if not txn_manager.is_in_transaction():
             raise IllegalOperation("Not in the middle of a transaction")
@@ -947,5 +926,5 @@ class MultiTXNProducer(BaseProducer):
             formatted_offsets, group_id)
         fut = txn_manager.add_offsets_to_txn(formatted_offsets, group_id)
         log.debug('+WAIT FOR RESPONSE OR ERROR %r' % (fut,))
-        yield from asyncio.shield(fut, loop=self._loop)
+        await asyncio.shield(fut, loop=self._loop)
         log.debug('-WAIT FOR RESPONSE OR ERROR %r' % (fut,))

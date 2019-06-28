@@ -76,7 +76,7 @@ class AIOKafkaClient:
             Default: None.
         connections_max_idle_ms (int): Close idle connections after the number
             of milliseconds specified by this config. Specifying `None` will
-            disable idle checks. Default: 540000 (9 minutes).
+            disable idle checks. Default: 540000 (9hours).
     """
 
     _closed = False
@@ -154,12 +154,11 @@ class AIOKafkaClient:
     def hosts(self):
         return collect_hosts(self._bootstrap_servers)
 
-    @asyncio.coroutine
-    def close(self):
+    async def close(self):
         if self._sync_task:
             self._sync_task.cancel()
             try:
-                yield from self._sync_task
+                await self._sync_task
             except asyncio.CancelledError:
                 pass
             self._sync_task = None
@@ -169,13 +168,12 @@ class AIOKafkaClient:
         for conn in self._conns.values():
             futs.append(conn.close(reason=CloseReason.SHUTDOWN))
         if futs:
-            yield from asyncio.gather(*futs, loop=self._loop)
+            await asyncio.gather(*futs, loop=self._loop)
 
     def set_close(self):
         self._closed = True
 
-    @asyncio.coroutine
-    def bootstrap(self):
+    async def bootstrap(self):
         """Try to to bootstrap initial cluster metadata"""
         # using request v0 for bootstap if not sure v1 is available
         if self._api_version == "auto" or self._api_version < (0, 10):
@@ -191,7 +189,7 @@ class AIOKafkaClient:
             log.debug("Attempting to bootstrap via node at %s:%s", host, port)
 
             try:
-                bootstrap_conn = yield from create_conn(
+                bootstrap_conn = await create_conn(
                     host, port, loop=self._loop, client_id=self._client_id,
                     request_timeout_ms=self._request_timeout_ms,
                     ssl_context=self._ssl_context,
@@ -208,7 +206,7 @@ class AIOKafkaClient:
                 continue
 
             try:
-                metadata = yield from bootstrap_conn.send(metadata_request)
+                metadata = await bootstrap_conn.send(metadata_request)
             except KafkaError as err:
                 log.warning('Unable to request metadata from "%s:%s": %s',
                             host, port, err)
@@ -234,19 +232,18 @@ class AIOKafkaClient:
 
         # detect api version if need
         if self._api_version == 'auto':
-            self._api_version = yield from self.check_version()
+            self._api_version = await self.check_version()
 
         if self._sync_task is None:
             # starting metadata synchronizer task
             self._sync_task = ensure_future(
                 self._md_synchronizer(), loop=self._loop)
 
-    @asyncio.coroutine
-    def _md_synchronizer(self):
+    async def _md_synchronizer(self):
         """routine (async task) for synchronize cluster metadata every
         `metadata_max_age_ms` milliseconds"""
         while True:
-            yield from asyncio.wait(
+            await asyncio.wait(
                 [self._md_update_waiter],
                 timeout=self._metadata_max_age_ms / 1000,
                 loop=self._loop)
@@ -254,7 +251,7 @@ class AIOKafkaClient:
             topics = self._topics
             if self._md_update_fut is None:
                 self._md_update_fut = create_future(loop=self._loop)
-            ret = yield from self._metadata_update(self.cluster, topics)
+            ret = await self._metadata_update(self.cluster, topics)
             # If list of topics changed during metadata update we must update
             # it again right away.
             if topics != self._topics:
@@ -278,8 +275,7 @@ class AIOKafkaClient:
             return None
         return random.choice(nodeids)
 
-    @asyncio.coroutine
-    def _metadata_update(self, cluster_metadata, topics):
+    async def _metadata_update(self, cluster_metadata, topics):
         assert isinstance(cluster_metadata, ClusterMetadata)
         topics = list(topics)
         version_id = 0 if self.api_version < (0, 10) else 1
@@ -292,7 +288,7 @@ class AIOKafkaClient:
             nodeids.append('bootstrap')
         random.shuffle(nodeids)
         for node_id in nodeids:
-            conn = yield from self._get_conn(node_id)
+            conn = await self._get_conn(node_id)
 
             if conn is None:
                 continue
@@ -300,7 +296,7 @@ class AIOKafkaClient:
                       metadata_request, node_id)
 
             try:
-                metadata = yield from conn.send(metadata_request)
+                metadata = await conn.send(metadata_request)
             except KafkaError as err:
                 log.error(
                     'Unable to request metadata from node with id %s: %s',
@@ -342,11 +338,10 @@ class AIOKafkaClient:
         # Metadata will be updated in the background by syncronizer
         return asyncio.shield(self._md_update_fut, loop=self._loop)
 
-    @asyncio.coroutine
-    def fetch_all_metadata(self):
+    async def fetch_all_metadata(self):
         cluster_md = ClusterMetadata(
             metadata_max_age_ms=self._metadata_max_age_ms)
-        updated = yield from self._metadata_update(cluster_md, [])
+        updated = await self._metadata_update(cluster_md, [])
         if not updated:
             raise KafkaError(
                 'Unable to get cluster metadata over all known brokers')
@@ -390,9 +385,10 @@ class AIOKafkaClient:
                 reason == CloseReason.CONNECTION_TIMEOUT:
             self.force_metadata_update()
 
-    @asyncio.coroutine
-    def _get_conn(self, node_id, *, group=ConnectionGroup.DEFAULT,
-                  no_hint=False):
+    async def _get_conn(
+        self, node_id, *, group=ConnectionGroup.DEFAULT,
+        no_hint=False
+    ):
         "Get or create a connection to a broker using host and port"
         conn_id = (node_id, group)
         if conn_id in self._conns:
@@ -419,7 +415,7 @@ class AIOKafkaClient:
             log.debug("Initiating connection to node %s at %s:%s",
                       node_id, broker.host, broker.port)
 
-            with (yield from self._get_conn_lock):
+            async with self._get_conn_lock:
                 if conn_id in self._conns:
                     return self._conns[conn_id]
 
@@ -427,7 +423,7 @@ class AIOKafkaClient:
                 if version_hint == "auto" or no_hint:
                     version_hint = None
 
-                self._conns[conn_id] = yield from create_conn(
+                self._conns[conn_id] = await create_conn(
                     broker.host, broker.port, loop=self._loop,
                     client_id=self._client_id,
                     request_timeout_ms=self._request_timeout_ms,
@@ -442,7 +438,7 @@ class AIOKafkaClient:
                     sasl_kerberos_domain_name=self._sasl_kerberos_domain_name,
                     version_hint=version_hint
                 )
-        except (OSError, asyncio.TimeoutError, KafkaError) as err:
+        except (OSError, asyncio.TimeoutError) as err:
             log.error('Unable connect to node with id %s: %s', node_id, err)
             if group == ConnectionGroup.DEFAULT:
                 # Connection failures imply that our metadata is stale, so
@@ -452,15 +448,13 @@ class AIOKafkaClient:
         else:
             return self._conns[conn_id]
 
-    @asyncio.coroutine
-    def ready(self, node_id, *, group=ConnectionGroup.DEFAULT):
-        conn = yield from self._get_conn(node_id, group=group)
+    async def ready(self, node_id, *, group=ConnectionGroup.DEFAULT):
+        conn = await self._get_conn(node_id, group=group)
         if conn is None:
             return False
         return True
 
-    @asyncio.coroutine
-    def send(self, node_id, request, *, group=ConnectionGroup.DEFAULT):
+    async def send(self, node_id, request, *, group=ConnectionGroup.DEFAULT):
         """Send a request to a specific node.
 
         Arguments:
@@ -476,7 +470,7 @@ class AIOKafkaClient:
         Returns:
             Future: resolves to Response struct
         """
-        if not (yield from self.ready(node_id, group=group)):
+        if not (await self.ready(node_id, group=group)):
             raise NodeNotReadyError(
                 "Attempt to send a request to node"
                 " which is not ready (node id {}).".format(node_id))
@@ -490,7 +484,7 @@ class AIOKafkaClient:
         future = self._conns[(node_id, group)].send(
             request, expect_response=expect_response)
         try:
-            result = yield from future
+            result = await future
         except asyncio.TimeoutError:
             # close connection so it is renewed in next request
             self._conns[(node_id, group)].close(
@@ -499,8 +493,7 @@ class AIOKafkaClient:
         else:
             return result
 
-    @asyncio.coroutine
-    def check_version(self, node_id=None):
+    async def check_version(self, node_id=None):
         """Attempt to guess the broker version"""
         if node_id is None:
             default_group_conns = [
@@ -531,26 +524,26 @@ class AIOKafkaClient:
         # vanilla MetadataRequest. If the server did not recognize the first
         # request, both will be failed with a ConnectionError that wraps
         # socket.error (32, 54, or 104)
-        conn = yield from self._get_conn(node_id, no_hint=True)
+        conn = await self._get_conn(node_id, no_hint=True)
         if conn is None:
             raise ConnectionError(
                 "No connection to node with id {}".format(node_id))
         for version, request in test_cases:
             try:
                 if not conn.connected():
-                    yield from conn.connect()
+                    await conn.connect()
                 assert conn, 'no connection to node with id {}'.format(node_id)
                 # request can be ignored by Kafka broker,
                 # so we send metadata request and wait response
                 task = self._loop.create_task(conn.send(request))
-                yield from asyncio.wait([task], timeout=0.1, loop=self._loop)
+                await asyncio.wait([task], timeout=0.1, loop=self._loop)
                 try:
-                    yield from conn.send(MetadataRequest_v0([]))
+                    await conn.send(MetadataRequest_v0([]))
                 except KafkaError:
                     # metadata request can be cancelled in case
                     # of invalid correlationIds order
                     pass
-                response = yield from task
+                response = await task
             except KafkaError:
                 continue
             else:
@@ -593,8 +586,7 @@ class AIOKafkaClient:
         # so if all else fails, choose that
         return (0, 10, 0)
 
-    @asyncio.coroutine
-    def _wait_on_metadata(self, topic):
+    async def _wait_on_metadata(self, topic):
         """
         Wait for cluster metadata including partitions for the given topic to
         be available.
@@ -617,25 +609,23 @@ class AIOKafkaClient:
 
         t0 = self._loop.time()
         while True:
-            yield from self.force_metadata_update()
+            await self.force_metadata_update()
             if topic in self.cluster.topics():
                 break
             if (self._loop.time() - t0) > (self._request_timeout_ms / 1000):
                 raise UnknownTopicOrPartitionError()
             if topic in self.cluster.unauthorized_topics:
                 raise Errors.TopicAuthorizationFailedError(topic)
-            yield from asyncio.sleep(self._retry_backoff, loop=self._loop)
+            await asyncio.sleep(self._retry_backoff, loop=self._loop)
 
         return self.cluster.partitions_for_topic(topic)
 
-    @asyncio.coroutine
-    def _maybe_wait_metadata(self):
+    async def _maybe_wait_metadata(self):
         if self._md_update_fut is not None:
-            yield from asyncio.shield(
+            await asyncio.shield(
                 self._md_update_fut, loop=self._loop)
 
-    @asyncio.coroutine
-    def coordinator_lookup(self, coordinator_type, coordinator_key):
+    async def coordinator_lookup(self, coordinator_type, coordinator_key):
         """ Lookup which node in the cluster is the coordinator for a certain
         role (Transaction coordinator or Group coordinator atm.)
         NOTE: Client keeps track of all coordination nodes separately, as they
@@ -658,7 +648,7 @@ class AIOKafkaClient:
                 "No transactions for older brokers"
             request = FindCoordinatorRequest[0](coordinator_key)
 
-        resp = yield from self.send(node_id, request)
+        resp = await self.send(node_id, request)
         log.debug("Received group coordinator response %s", resp)
         error_type = Errors.for_code(resp.error_code)
         if error_type is not Errors.NoError:
