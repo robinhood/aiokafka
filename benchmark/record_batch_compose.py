@@ -38,7 +38,7 @@ def finalize(results):
     # properly
     hash_val = hashlib.md5()
     for buf in results:
-        hash_val.update(buf.getvalue())
+        hash_val.update(buf)
     print(hash_val, file=open(os.devnull, "w"))
 
 
@@ -52,7 +52,7 @@ def func(loops: int, magic: int):
     t0 = perf.perf_counter()
     for _ in range(loops):
         batch = BatchBuilder(magic, batch_size=DEFAULT_BATCH_SIZE,
-                             compression_type=0)
+                             compression_type=0, is_transactional=False)
         for _ in range(MESSAGES_PER_BATCH):
             key, value, timestamp = next(precomputed_samples)
             size = batch.append(timestamp=None, key=key, value=value)
@@ -69,3 +69,4 @@ def func(loops: int, magic: int):
 runner = perf.Runner()
 runner.bench_time_func('batch_append_v0', func, 0)
 runner.bench_time_func('batch_append_v1', func, 1)
+runner.bench_time_func('batch_append_v2', func, 2)

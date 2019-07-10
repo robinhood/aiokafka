@@ -342,6 +342,33 @@ notified through a ``ConsumerRebalanceListener``, which allows them to finish
 necessary application-level logic such as state cleanup, manual offset commits,
 etc. See :meth:`aiokafka.AIOKafkaConsumer.subscribe` docs for more details.
 
+
+.. warning:: Be careful with ``ConsumerRebalanceListener`` to avoid deadlocks.
+    The Consumer will await the defined handlers and will block subsequent
+    calls to `getmany()` and `getone()`. For example this code will deadlock::
+
+        lock = asyncio.Lock()
+        consumer = AIOKafkaConsumer(...)
+
+        class MyRebalancer(aiokafka.ConsumerRebalanceListener):
+
+            async def on_partitions_revoked(self, revoked):
+                async with self.lock:
+                    pass
+
+            async def on_partitions_assigned(self, assigned):
+                pass
+
+        async def main():
+            consumer.subscribe("topic", listener=MyRebalancer())
+            while True:
+                async with self.lock:
+                    msgs = await consumer.getmany(timeout_ms=1000)
+                    # process messages
+
+    You need to put ``consumer.getmany(timeout_ms=1000)`` call outside of the
+    lock.
+
 For more information on how **Consumer Groups** are organized see 
 `Official Kafka Docs <https://kafka.apache.org/documentation/#intro_consumers>`_.
 
@@ -417,8 +444,10 @@ catch up). For example::
         for partition in consumer.assignment():
             highwater = consumer.highwater(partition)
             position = await consumer.position(partition)
-            lag = highwater - position
-            if lag > LAG_THRESHOLD:
+            position_lag = highwater - position
+            timestamp = consumer.last_poll_timestamp(partition)
+            time_lag = time.time() * 1000 - timestamp
+            if position_lag > POSITION_THRESHOLD or time_lag > TIME_THRESHOLD:
                 partitions.append(partition)
 
 .. note:: This interface differs from `pause()`/`resume()` interface of 
@@ -439,6 +468,64 @@ Some things to note about it:
   filtering, just use ``consumer.getone()`` instead.
 
 
+.. _transactional-consume:
+
+Reading Transactional Messages
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Transactions were introduced in Kafka 0.11.0 wherein applications can write to
+multiple topics and partitions atomically. In order for this to work, consumers
+reading from these partitions should be configured to only read committed data.
+This can be achieved by by setting the ``isolation_level=read_committed`` in
+the consumer's configuration::
+
+    consumer = aiokafka.AIOKafkaConsumer(
+        "my_topic",
+        loop=loop, bootstrap_servers='localhost:9092',
+        isolation_level="read_committed"
+    )
+    await consumer.start()
+    async for msg in consumer:  # Only read committed tranasctions
+        pass
+
+In `read_committed` mode, the consumer will read only those transactional
+messages which have been successfully committed. It will continue to read
+non-transactional messages as before. There is no client-side buffering in
+`read_committed` mode. Instead, the end offset of a partition for a
+`read_committed` consumer would be the offset of the first message in the
+partition belonging to an open transaction. This offset is known as the 
+**Last Stable Offset** (LSO).
+
+A `read_committed` consumer will only read up to the LSO and filter out any
+transactional messages which have been aborted. The LSO also affects the
+behavior of ``seek_to_end(*partitions)`` and ``end_offsets(partitions)``
+for ``read_committed`` consumers, details of which are in each method's
+documentation. Finally, ``last_stable_offset()`` API was added similary to
+``highwater()`` API to query the lSO on a currently assigned transaction::
+
+    async for msg in consumer:  # Only read committed tranasctions
+        tp = TopicPartition(msg.topic, msg.partition)
+        lso = consumer.last_stable_offset(tp)
+        lag = lso - msg.offset
+        print(f"Consumer is behind by {lag} messages")
+
+        end_offsets = await consumer.end_offsets([tp])
+        assert end_offsets[tp] == lso
+
+    await consumer.seek_to_end(tp)
+    position = await consumer.position(tp)
+
+Partitions with transactional messages will include commit or abort markers
+which indicate the result of a transaction. There markers are not returned to
+applications, yet have an offset in the log. As a result, applications reading
+from topics with transactional messages will see gaps in the consumed offsets.
+These missing messages would be the transaction markers, and they are filtered
+out for consumers in both isolation levels. Additionally, applications using 
+`read_committed` consumers may also see gaps due to aborted transactions, since
+those messages would not be returned by the consumer and yet would have valid
+offsets.
+
+
 Detecting Consumer Failures
 ---------------------------
 
@@ -449,5 +536,9 @@ It's not the same for ``aiokafka``, for more details read
 :ref:`Difference between aiokafka and kafka-python <kafka_python_difference>`.
 
 ``aiokafka`` will join the group on ``consumer.start()`` and will send
-heartbeats in the background even if the consumer makes no progress. It will
-also commit offsets in autocommit mode strictly by time in the background.
+heartbeats in the background, keeping the group alive, same as Java Client.
+But in the case of a rebalance it will also done in the background.
+
+Offset commits in autocommit mode is done strictly by time in the background
+(in Java client autocommit will not be done if you don't call ``poll()``
+another time).

@@ -1,8 +1,10 @@
 import logging
-from asyncio import AbstractEventLoop as ALoop, shield, Event
+import contextlib
+import copy
+from asyncio import AbstractEventLoop as ALoop, shield, Event, Future
 from enum import Enum
 
-from typing import Set, Pattern, Dict
+from typing import Set, Pattern, Dict, List
 
 from aiokafka.errors import IllegalStateError
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
@@ -10,6 +12,8 @@ from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.util import create_future
 
 log = logging.getLogger(__name__)
+
+(List, Future)
 
 
 class SubscriptionType(Enum):
@@ -41,6 +45,10 @@ class SubscriptionState:
         self._subscription_waiters = []  # type: List[Future]
         self._assignment_waiters = []  # type: List[Future]
         self._loop = loop  # type: ALoop
+
+        # Fetch contexts
+        self._fetch_count = 0
+        self._last_fetch_ended = loop.time()
 
     @property
     def subscription(self) -> "Subscription":
@@ -248,6 +256,54 @@ class SubscriptionState:
         self._assignment_waiters.append(fut)
         return fut
 
+    def register_fetch_waiters(self, waiters):
+        self._fetch_waiters = waiters
+
+    def abort_waiters(self, exc):
+        """ Critical error occured, we will abort any pending waiter
+        """
+        for waiter in self._assignment_waiters:
+            if not waiter.done():
+                waiter.set_exception(copy.copy(exc))
+        self._subscription_waiters.clear()
+
+        for waiter in self._fetch_waiters:
+            if not waiter.done():
+                waiter.set_exception(copy.copy(exc))
+
+    # Pause/Resume API
+
+    def pause(self, tp: TopicPartition) -> None:
+        self._assigned_state(tp).pause()
+
+    def paused_partitions(self) -> Set[TopicPartition]:
+        res = set([])
+        for tp in self.assigned_partitions():
+            if self._assigned_state(tp).paused:
+                res.add(tp)
+        return res
+
+    def resume(self, tp: TopicPartition) -> None:
+        self._assigned_state(tp).resume()
+
+    # Fetch context
+
+    @contextlib.contextmanager
+    def fetch_context(self):
+        self._fetch_count += 1
+        yield
+        self._fetch_count -= 1
+        if self._fetch_count == 0:
+            self._last_fetch_ended = self._loop.time()
+
+    @property
+    def fetcher_idle_time(self):
+        """ How much time (in seconds) spent without consuming any records """
+        if self._fetch_count == 0:
+            return self._loop.time() - self._last_fetch_ended
+        else:
+            return 0
+
 
 class Subscription:
     """ Describes current subscription to a list of topics. In case of pattern
@@ -339,7 +395,7 @@ class Assignment:
 
         self._topic_partitions = frozenset(topic_partitions)
 
-        self._tp_state = {}  # type: Dict[TopicPartition:TopicPartitionState]
+        self._tp_state = {}  # type: Dict[TopicPartition, TopicPartitionState]
         for tp in self._topic_partitions:
             self._tp_state[tp] = TopicPartitionState(self, loop=loop)
 
@@ -366,26 +422,25 @@ class Assignment:
         all_consumed = {}
         for tp in self._topic_partitions:
             state = self.state_value(tp)
-            if state.has_valid_position and state.position != state.committed:
+            if state.has_valid_position:
                 all_consumed[tp] = OffsetAndMetadata(state.position, '')
         return all_consumed
 
-    def missing_commit_cache(self):
-        """ Return all partitions that don't have a commit point cache """
-        missing = []
+    def requesting_committed(self):
+        """ Return all partitions that are requesting commit point fetch """
+        requesting = []
         for tp in self._topic_partitions:
             tp_state = self.state_value(tp)
-            if tp_state.committed is None:
-                missing.append(tp)
-        return missing
+            if tp_state._committed_futs:
+                requesting.append(tp)
+        return requesting
 
 
 class PartitionStatus(Enum):
 
-    ASSIGNED = 0
-    AWAITING_RESET = 1
-    CONSUMING = 2
-    UNASSIGNED = 3
+    AWAITING_RESET = 0
+    CONSUMING = 1
+    UNASSIGNED = 2
 
 
 class TopicPartitionState(object):
@@ -393,9 +448,7 @@ class TopicPartitionState(object):
 
     After creation the workflow is similar to:
 
-        * Partition assigned to this consumer (ASSIGNED)
-        * Coordinator checks the latest commit offset for partition (
-          ASSIGNED -> AWAITING_RESET)
+        * Partition assigned to this consumer (AWAITING_RESET)
         * Fetcher either uses commit save point or resets position in respect
           to defined reset policy (AWAITING_RESET -> CONSUMING)
         * Fetcher loads a new batch of records, yields results to consumer
@@ -406,10 +459,11 @@ class TopicPartitionState(object):
 
     def __init__(self, assignment, *, loop):
         # Synchronized values
-        self._committed = None  # Last committed position and metadata
-        self._committed_fut = create_future(loop=loop)
+        self._committed_futs = []
 
         self.highwater = None  # Last fetched highwater mark
+        self.lso = None  # Last fetched stable offset mark
+        self.timestamp = None  # timestamp of last poll
         self._position = None  # The current position of the topic
         self._position_fut = create_future(loop=loop)
 
@@ -417,14 +471,21 @@ class TopicPartitionState(object):
         # or by Fetcher after confirming that current position is no longer
         # reachable.
         self._reset_strategy = None  # type: int
-        self._status = PartitionStatus.ASSIGNED  # type: PartitionStatus
+        self._status = PartitionStatus.AWAITING_RESET  # type: PartitionStatus
 
         self._loop = loop
         self._assignment = assignment
 
+        self._paused = False
+        self._resume_fut = None
+
     @property
-    def committed(self) -> OffsetAndMetadata:
-        return self._committed
+    def paused(self):
+        return self._paused
+
+    @property
+    def resume_fut(self):
+        return self._resume_fut
 
     @property
     def has_valid_position(self) -> bool:
@@ -455,34 +516,19 @@ class TopicPartitionState(object):
 
     # Committed manipulation
 
-    def reset_committed(self, offset_meta: OffsetAndMetadata):
-        """ Called by Coordinator on initial commit query after assignment.
-        """
-        self._committed = offset_meta
-        self._committed_fut.set_result(None)
-        if self._status == PartitionStatus.ASSIGNED:
-            self._status = PartitionStatus.AWAITING_RESET
-
-    def begin_commit(self):
-        """ Signal that currently we started committing offset for this
-        partition, so we can't rely on commit cache. It can be bad if we
-        reset offset to previous commit point.
-        """
-        self._committed = None
-        if self._committed_fut.done():
-            self._committed_fut = create_future(loop=self._loop)
+    def fetch_committed(self):
+        fut = create_future(loop=self._loop)
+        self._committed_futs.append(fut)
+        self._assignment.commit_refresh_needed.set()
+        return fut
 
     def update_committed(self, offset_meta: OffsetAndMetadata):
         """ Called by Coordinator on successfull commit to update commit cache.
         """
-        self._committed = offset_meta
-        if not self._committed_fut.done():
-            self._committed_fut.set_result(None)
-
-    def wait_for_committed(self):
-        assert self._committed is None
-        self._assignment.commit_refresh_needed.set()
-        return shield(self._committed_fut, loop=self._loop)
+        for fut in self._committed_futs:
+            if not fut.done():
+                fut.set_result(offset_meta)
+        self._committed_futs.clear()
 
     # Position manipulation
 
@@ -514,6 +560,19 @@ class TopicPartitionState(object):
 
     def wait_for_position(self):
         return shield(self._position_fut, loop=self._loop)
+
+    # Pause/Unpause
+    def pause(self):
+        if not self._paused:
+            self._paused = True
+            assert self._resume_fut is None
+            self._resume_fut = create_future(loop=self._loop)
+
+    def resume(self):
+        if self._paused:
+            self._paused = False
+            self._resume_fut.set_result(None)
+            self._resume_fut = None
 
     def __repr__(self):
         return "TopicPartitionState<Status={} position={}>".format(

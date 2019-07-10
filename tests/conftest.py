@@ -3,7 +3,6 @@ import gc
 import docker as libdocker
 import pytest
 import socket
-import struct
 import uuid
 import sys
 import pathlib
@@ -12,10 +11,13 @@ import subprocess
 
 from aiokafka.record.legacy_records import (
     LegacyRecordBatchBuilder, _LegacyRecordBatchBuilderPy)
+from aiokafka.record.default_records import (
+    DefaultRecordBatchBuilder, _DefaultRecordBatchBuilderPy)
 from aiokafka.util import NO_EXTENSIONS
 
 if not NO_EXTENSIONS:
-    assert LegacyRecordBatchBuilder is not _LegacyRecordBatchBuilderPy, \
+    assert LegacyRecordBatchBuilder is not _LegacyRecordBatchBuilderPy and \
+        DefaultRecordBatchBuilder is not _DefaultRecordBatchBuilderPy, \
         "Expected to run tests with C extension, but it was not imported. "\
         "To run tests without a C extensions set env AIOKAFKA_NO_EXTENSIONS=1"
     print("Running tests with C extension")
@@ -26,7 +28,7 @@ else:
 def pytest_addoption(parser):
     parser.addoption('--docker-image',
                      action='store',
-                     default='pygo/kafka:2.11_0.9.0.1',
+                     default=None,
                      help='Kafka docker image to use')
     parser.addoption('--no-pull',
                      action='store_true',
@@ -34,8 +36,45 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(scope='session')
-def docker():
-    return libdocker.Client(version='auto')
+def docker(request):
+    image = request.config.getoption('--docker-image')
+    if not image:
+        return None
+    return libdocker.from_env()
+
+
+@pytest.fixture(scope='class')
+def acl_manager(kafka_server, request):
+    image = request.config.getoption('--docker-image')
+    tag = image.split(":")[-1].replace('_', '-')
+
+    from ._testutil import ACLManager
+    manager = ACLManager(kafka_server[-1], tag)
+    return manager
+
+
+@pytest.yield_fixture(autouse=True)
+def clean_acl(acl_manager):
+    # This is used to have a better report on ResourceWarnings. Without it
+    # all warnings will be filled in the end of last test-case.
+    yield
+    acl_manager.cleanup()
+
+
+if sys.platform != 'win32':
+
+    @pytest.fixture(scope='class')
+    def kerberos_utils(kafka_server):
+        from ._testutil import KerberosUtils
+        utils = KerberosUtils(kafka_server[-1])
+        utils.create_keytab()
+        return utils
+else:
+
+    @pytest.fixture()
+    def kerberos_utils():
+        pytest.skip("Only unit tests on windows for now =(")
+        return
 
 
 @pytest.fixture(scope='session')
@@ -66,36 +105,10 @@ def ssl_folder(docker_ip_address):
     return ssl_dir
 
 
-if sys.platform == 'darwin' or sys.platform == 'win32':
-
-    @pytest.fixture(scope='session')
-    def docker_ip_address():
-        """Returns IP address of the docker daemon service."""
-        # docker for mac publishes ports on localhost
-        return '127.0.0.1'
-
-else:
-
-    @pytest.fixture(scope='session')
-    def docker_ip_address(docker):
-        """Returns IP address of the docker daemon service."""
-        # Fallback docker daemon bridge name
-        ifname = 'docker0'
-        try:
-            for network in docker.networks():
-                _ifname = network['Options'].get(
-                    'com.docker.network.bridge.name')
-                if _ifname is not None:
-                    ifname = _ifname
-                    break
-        except libdocker.errors.InvalidVersion:
-            pass
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        import fcntl
-        return socket.inet_ntoa(fcntl.ioctl(
-            s.fileno(),
-            0x8915,  # SIOCGIFADDR
-            struct.pack('256s', ifname[:15].encode('utf-8')))[20:24])
+@pytest.fixture(scope='session')
+def docker_ip_address():
+    """Returns IP address of the docker daemon service."""
+    return '127.0.0.1'
 
 
 @pytest.fixture(scope='session')
@@ -118,39 +131,59 @@ if sys.platform != 'win32':
     def kafka_server(request, docker, docker_ip_address,
                      unused_port, session_id, ssl_folder):
         image = request.config.getoption('--docker-image')
+        if not image:
+            pytest.skip(
+                "Skipping functional test as `--docker-image` not provided")
+            return
         if not request.config.getoption('--no-pull'):
-            docker.pull(image)
+            docker.images.pull(image)
         kafka_host = docker_ip_address
         kafka_port = unused_port()
         kafka_ssl_port = unused_port()
-        container = docker.create_container(
+        kafka_sasl_plain_port = unused_port()
+        kafka_sasl_ssl_port = unused_port()
+        environment = {
+            'ADVERTISED_HOST': kafka_host,
+            'ADVERTISED_PORT': kafka_port,
+            'ADVERTISED_SSL_PORT': kafka_ssl_port,
+            'ADVERTISED_SASL_PLAINTEXT_PORT': kafka_sasl_plain_port,
+            'ADVERTISED_SASL_SSL_PORT': kafka_sasl_ssl_port,
+            'NUM_PARTITIONS': 2
+        }
+        kafka_version = image.split(":")[-1].split("_")[-1]
+        if not kafka_version == "0.9.0.1":
+            environment['SASL_MECHANISMS'] = "PLAIN,GSSAPI"
+            environment['SASL_JAAS_FILE'] = "kafka_server_jaas.conf"
+        else:
+            environment['SASL_MECHANISMS'] = "GSSAPI"
+            environment['SASL_JAAS_FILE'] = "kafka_server_gssapi_jaas.conf"
+
+        container = docker.containers.run(
             image=image,
             name='aiokafka-tests',
-            # name='aiokafka-tests-{}'.format(session_id),
-            ports=[2181, kafka_port, kafka_ssl_port],
-            volumes=['/ssl_cert'],
-            environment={
-                'ADVERTISED_HOST': kafka_host,
-                'ADVERTISED_PORT': kafka_port,
-                'ADVERTISED_SSL_PORT': kafka_ssl_port,
-                'NUM_PARTITIONS': 2
+            ports={
+                2181: 2181,
+                "88/udp": 88,
+                kafka_port: kafka_port,
+                kafka_ssl_port: kafka_ssl_port,
+                kafka_sasl_plain_port: kafka_sasl_plain_port,
+                kafka_sasl_ssl_port: kafka_sasl_ssl_port
             },
-            host_config=docker.create_host_config(
-                port_bindings={
-                    2181: (kafka_host, unused_port()),
-                    kafka_port: (kafka_host, kafka_port),
-                    kafka_ssl_port: (kafka_host, kafka_ssl_port)
-                },
-                binds={
-                    str(ssl_folder.resolve()): {
-                        "bind": "/ssl_cert",
-                        "mode": "ro"
-                    }
-                }))
-        docker.start(container=container['Id'])
-        yield kafka_host, kafka_port, kafka_ssl_port
-        docker.kill(container=container['Id'])
-        docker.remove_container(container['Id'])
+            volumes={
+                str(ssl_folder.resolve()): {
+                    "bind": "/ssl_cert",
+                    "mode": "ro"
+                }
+            },
+            environment=environment,
+            tty=True,
+            detach=True)
+
+        yield (
+            kafka_host, kafka_port, kafka_ssl_port, kafka_sasl_plain_port,
+            kafka_sasl_ssl_port, container
+        )
+        container.remove(force=True)
 
 else:
 
@@ -190,13 +223,17 @@ def setup_test_class_serverless(request, loop, ssl_folder):
 
 
 @pytest.fixture(scope='class')
-def setup_test_class(request, loop, kafka_server, ssl_folder):
+def setup_test_class(request, loop, kafka_server, ssl_folder, acl_manager,
+                     kerberos_utils):
     request.cls.loop = loop
-    khost, kport, ksslport = kafka_server
-    request.cls.kafka_host = khost
-    request.cls.kafka_port = kport
-    request.cls.kafka_ssl_port = ksslport
+    request.cls.kafka_host = kafka_server[0]
+    request.cls.kafka_port = kafka_server[1]
+    request.cls.kafka_ssl_port = kafka_server[2]
+    request.cls.kafka_sasl_plain_port = kafka_server[3]
+    request.cls.kafka_sasl_ssl_port = kafka_server[4]
     request.cls.ssl_folder = ssl_folder
+    request.cls.acl_manager = acl_manager
+    request.cls.kerberos_utils = kerberos_utils
 
     docker_image = request.config.getoption('--docker-image')
     kafka_version = docker_image.split(":")[-1].split("_")[-1]

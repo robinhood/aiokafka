@@ -32,15 +32,31 @@ ext = '.pyx' if USE_CYTHON else '.c'
 
 extensions = [
     Extension(
-        'aiokafka.record._legacy_records',
-        ['aiokafka/record/_legacy_records' + ext],
+        'aiokafka.record._crecords.legacy_records',
+        ['aiokafka/record/_crecords/legacy_records' + ext],
         libraries=LIBRARIES,
         extra_compile_args=CFLAGS,
         extra_link_args=LDFLAGS
     ),
     Extension(
-        'aiokafka.record._memory_records',
-        ['aiokafka/record/_memory_records' + ext],
+        'aiokafka.record._crecords.default_records',
+        ['aiokafka/record/_crecords/crc32c.c',
+         'aiokafka/record/_crecords/default_records' + ext],
+        libraries=LIBRARIES,
+        extra_compile_args=CFLAGS,
+        extra_link_args=LDFLAGS
+    ),
+    Extension(
+        'aiokafka.record._crecords.memory_records',
+        ['aiokafka/record/_crecords/memory_records' + ext],
+        libraries=LIBRARIES,
+        extra_compile_args=CFLAGS,
+        extra_link_args=LDFLAGS
+    ),
+    Extension(
+        'aiokafka.record._crecords.cutil',
+        ['aiokafka/record/_crecords/crc32c.c',
+         'aiokafka/record/_crecords/cutil' + ext],
         libraries=LIBRARIES,
         extra_compile_args=CFLAGS,
         extra_link_args=LDFLAGS
@@ -73,7 +89,7 @@ class ve_build_ext(build_ext):
             raise BuildFailed()
 
 
-install_requires = ['kafka-python==1.3.5']
+install_requires = ['kafka-python==1.4.6']
 
 PY_VER = sys.version_info
 
@@ -81,11 +97,8 @@ if PY_VER >= (3, 5):
     pass
 elif PY_VER >= (3, 4):
     install_requires.append('typing')
-elif PY_VER >= (3, 3):
-    install_requires.append('typing')
-    install_requires.append('asyncio')
 else:
-    raise RuntimeError("aiokafka doesn't suppport Python earlier than 3.3")
+    raise RuntimeError("aiokafka doesn't suppport Python earlier than 3.4")
 
 
 def read(f):
@@ -110,10 +123,9 @@ classifiers = [
     'License :: OSI Approved :: Apache Software License',
     'Intended Audience :: Developers',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.3',
-    'Programming Language :: Python :: 3.4',
     'Programming Language :: Python :: 3.5',
     'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
     'Operating System :: OS Independent',
     'Topic :: System :: Networking',
     'Topic :: System :: Distributed Computing',

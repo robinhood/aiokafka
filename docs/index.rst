@@ -3,9 +3,9 @@ Welcome to aiokafka's documentation!
 
 .. _GitHub: https://github.com/aio-libs/aiokafka
 .. _kafka-python: https://github.com/dpkp/kafka-python
-.. _asyncio: http://docs.python.org/3.4/library/asyncio.html
+.. _asyncio: http://docs.python.org/3.7/library/asyncio.html
 
-.. image:: https://img.shields.io/badge/kafka-0.10%2C%200.9-brightgreen.svg
+.. image:: https://img.shields.io/badge/kafka-1.0%2C%200.11%2C%200.10%2C%200.9-brightgreen.svg
     :target: https://kafka.apache.org
 .. image:: https://img.shields.io/pypi/pyversions/aiokafka.svg
     :target: https://pypi.python.org/pypi/aiokafka
@@ -18,8 +18,7 @@ The client is designed to function much like the official Java client, with a sp
 
 **aiokafka** can be used with 0.9+ Kafka brokers and supports fully coordinated
 consumer groups -- i.e., dynamic partition assignment to multiple consumers in
-the same group. For now new features of Kafka 11+ are yet to be implemented,
-including Transactional Producer.
+the same group.
 
 
 Getting started
@@ -152,6 +151,13 @@ For **Windows** the easiest way is to fetch a precompiled wheel from
 http://www.lfd.uci.edu/~gohlke/pythonlibs/#python-snappy
 
 
+Optional GSSAPI install
++++++++++++++++++++++++
+
+To enable SASL authentication with GSSAPI you need to install ``gssapi``:
+
+>>> pip3 install gssapi
+
 
 Source code
 -----------
@@ -162,7 +168,7 @@ Please feel free to file an issue on `bug tracker
 <https://github.com/aio-libs/aiokafka/issues>`_ if you have found a bug
 or have some suggestion for library improvement.
 
-The library uses `Travis <https://travis-ci.org/aio-libs/aiokafka>`_ for
+The library uses `Travis <https://travis-ci.com/aio-libs/aiokafka>`_ for
 Continious Integration.
 
 

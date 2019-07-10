@@ -1,5 +1,101 @@
 CHANGES
---------
+-------
+
+523.feature
+^^^^^^^^^^^
+
+Add `consumer.last_poll_timestamp(partition)` which gives the ms timestamp of the last update of `highwater` and `lso`.
+
+
+0.5.2 (2019-03-10)
+^^^^^^^^^^^^^^^^^^
+
+Bugfixes:
+
+* Fix ConnectionError breaking metadata sync background task (issue #517 and #512)
+* Fix event_waiter reference before assignment (pr #504 by @romantolkachyov)
+* Bump version of kafka-python
+
+
+0.5.1 (2019-03-10)
+^^^^^^^^^^^^^^^^^^
+
+New features:
+
+* Add SASL support with both SASL plain and SASL GGSAPI. Support also includes
+  Broker v0.9.0, but you will need to explicitly pass ``api_version="0.9"``.
+  (Big thanks to @cyrbil and @jsurloppe for working on this)
+* Added support for max_poll_interval_ms and rebalance_timeout_ms settings (
+  issue #67)
+* Added pause/resume API for AIOKafkaConsumer. (issue #304)
+* Added header support to both AIOKafkaConsumer and AIOKafkaProducer for
+  brokers v0.11 and above. (issue #462)
+
+Bugfixes:
+
+* Made sure to not request metadata for all topics if broker version is passed
+  explicitly and is 0.10 and above. (issue #440, thanks to @ulrikjohansson)
+* Make sure heartbeat task will close if group is reset. (issue #372)
+
+
+0.5.0 (2018-12-28)
+^^^^^^^^^^^^^^^^^^
+
+New features:
+
+* Add full support for V2 format messages with a Cython extension. Those are
+  used for Kafka >= 0.11.0.0
+* Added support for transactional producing (issue #182)
+* Added support for indempotent producing with `enable_idempotence` parameter
+* Added support for `fetch_max_bytes` in AIOKafkaConsumer. This can help limit
+  the amount of data transferred in a single roundtrip to broker, which is
+  essential for consumers with large amount of partitions
+
+Bugfixes:
+
+* Fix issue with connections not propagating serialization errors
+* Fix issue with `group=None` resetting offsets on every metadata update
+  (issue #441)
+* Fix issue with messages not delivered in order when Leader changes (issue
+  #228)
+* Fixed version parsing of `api_version` parameter. Before it ignored the
+  parameter
+
+
+0.4.3 (2018-11-01)
+^^^^^^^^^^^^^^^^^^
+
+Bugfix:
+
+* Fixed memory issue introduced as a result of a bug in `asyncio.shield` and
+  not cancelling coroutine after usage. (see issue #444 and #436)
+
+
+0.4.2 (2018-09-12)
+^^^^^^^^^^^^^^^^^^
+
+Bugfix:
+
+* Added error propagation from coordinator to main consumer. Before consumer
+  just stopped with error logged. (issue #294)
+* Fix manual partition assignment, broken in 0.4.0 (issue #394)
+* Fixed RecursionError in MessageAccumulator.add_message (issue #409)
+* Update kafka-python to latest 1.4.3 and added support for Python3.7
+* Dropped support for Python3.3 and Python3.4
+
+Infrastructure:
+
+* Added Kafka 1.0.2 broker for CI test runner
+* Refactored travis CI build pipeline
+
+0.4.1 (2018-05-13)
+^^^^^^^^^^^^^^^^^^
+
+* Fix issue when offset commit error reports wrong partition in log (issue #353)
+* Add ResourceWarning when Producer, Consumer or Connections are not closed
+  properly (issue #295)
+* Fix Subscription None in GroupCoordinator._do_group_rejoin (issue #306)
+
 
 0.4.0 (2018-01-30)
 ^^^^^^^^^^^^^^^^^^
@@ -51,7 +147,7 @@ Big thanks to:
 ^^^^^^^^^^^^^^^^^^
 
 * Added `AIOKafkaProducer.flush()` method. (PR #209 by @vineet-rh)
-* Fixed a bug with uvloop involving `float("inf")` for timeout. (PR #210 by 
+* Fixed a bug with uvloop involving `float("inf")` for timeout. (PR #210 by
    dmitry-moroz)
 * Changed test runner to allow running tests on OSX. (PR #213 by @shargan)
 
@@ -75,7 +171,7 @@ Big thanks to:
 0.2.3 (2017-07-23)
 ^^^^^^^^^^^^^^^^^^
 
-* Fixed retry problem in Producer, when buffer is not reset to 0 offset. 
+* Fixed retry problem in Producer, when buffer is not reset to 0 offset.
   Thanks to @ngavrysh for the fix in Tubular/aiokafka fork. (issue #184)
 * Fixed how Producer handles retries on Leader node failure. It just did not
   work before... Thanks to @blugowski for the help in locating the problem.
@@ -103,9 +199,9 @@ Big thanks to @Artimi for pointing out several of those issues.
 0.2.1 (2017-02-19)
 ^^^^^^^^^^^^^^^^^^
 
-* Add a check to wait topic autocreation in Consumer, instead of raising 
+* Add a check to wait topic autocreation in Consumer, instead of raising
   UnknownTopicOrPartitionError (PR #92 by fabregas)
-* Consumer now stops consumption after `consumer.stop()` call. Any new `get*` calls 
+* Consumer now stops consumption after `consumer.stop()` call. Any new `get*` calls
   will result in ConsumerStoppedError (PR #81)
 * Added `exclude_internal_topics` option for Consumer (PR #111)
 * Better support for pattern subscription when used with `group_id` (part of PR #111)

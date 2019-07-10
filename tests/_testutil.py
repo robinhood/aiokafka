@@ -5,7 +5,11 @@ import time
 import unittest
 import pytest
 import operator
+import subprocess
+import pathlib
+import shutil
 import sys
+import os
 
 from contextlib import contextmanager
 from functools import wraps
@@ -15,6 +19,9 @@ from aiokafka.client import AIOKafkaClient
 from aiokafka.errors import ConnectionError
 from aiokafka.producer import AIOKafkaProducer
 from aiokafka.helpers import create_ssl_context
+
+import logging
+log = logging.getLogger(__name__)
 
 
 __all__ = ['KafkaIntegrationTestCase', 'random_string']
@@ -27,8 +34,9 @@ def run_until_complete(fun):
     @wraps(fun)
     def wrapper(test, *args, **kw):
         loop = test.loop
+        timeout = getattr(test, "TEST_TIMEOUT", 30)
         ret = loop.run_until_complete(
-            asyncio.wait_for(fun(test, *args, **kw), 30, loop=loop))
+            asyncio.wait_for(fun(test, *args, **kw), timeout, loop=loop))
         return ret
     return wrapper
 
@@ -92,9 +100,8 @@ class StubRebalanceListener(ConsumerRebalanceListener):
         self.assigned = None
         self.revoked = None
 
-    @asyncio.coroutine
-    def wait_assign(self):
-        return (yield from self.assigns.get())
+    async def wait_assign(self):
+        return (await self.assigns.get())
 
     def reset(self):
         while not self.assigns.empty():
@@ -107,6 +114,144 @@ class StubRebalanceListener(ConsumerRebalanceListener):
 
     def on_partitions_assigned(self, assigned):
         self.assigns.put_nowait(assigned)
+
+
+class ACLManager:
+
+    def __init__(self, docker, tag):
+        self._docker = docker
+        self._active_acls = []
+        self._tag = tag
+
+    @property
+    def cmd(self):
+        return "/opt/kafka_{tag}/bin/kafka-acls.sh".format(tag=self._tag)
+
+    def _exec(self, *cmd_options):
+        cmd = ' '.join(
+            [self.cmd, "--force",
+              '--authorizer-properties zookeeper.connect=localhost:2181'
+             ] + list(cmd_options))
+        exit_code, output = self._docker.exec_run(cmd)
+        if exit_code != 0:
+            for line in output.split(b'\n'):
+                log.warning(line)
+            raise RuntimeError("Failed to apply ACL")
+        else:
+            for line in output.split(b'\n'):
+                log.debug(line)
+            return output
+
+    def add_acl(self, **acl_params):
+        params = self._format_params(**acl_params)
+        self._exec("--add", *params)
+        self._active_acls.append(acl_params)
+
+    def remove_acl(self, **acl_params):
+        params = self._format_params(**acl_params)
+        self._exec("--remove", *params)
+        self._active_acls.remove(acl_params)
+
+    def list_acl(self, principal=None):
+        opts = []
+        if principal:
+            opts.append("--principal User:{}".format(principal))
+        return self._exec('--list', *opts)
+
+    def _format_params(
+            self, cluster=None, topic=None, group=None,
+            transactional_id=None,
+            allow_principal=None, deny_principal=None,
+            allow_host=None, deny_host=None,
+            operation=None, producer=None, consumer=None):
+        options = []
+        if cluster:
+            options.append("--cluster")
+        if topic is not None:
+            options.append("--topic {}".format(topic))
+        if group is not None:
+            options.append("--group {}".format(group))
+        if transactional_id is not None:
+            options.append("--transactional-id {}".format(transactional_id))
+        if allow_principal is not None:
+            options.append("--allow-principal User:{}".format(allow_principal))
+        if deny_principal is not None:
+            options.append("--deny-principal User:{}".format(deny_principal))
+        if allow_host is not None:
+            options.append("--allow-host {}".format(allow_host))
+        if deny_host is not None:
+            options.append("--deny-host {}".format(deny_host))
+        if operation is not None:
+            options.append("--operation {}".format(operation))
+        if producer is not None:
+            options.append("--producer")
+        if consumer is not None:
+            options.append("--consumer")
+        return options
+
+    def cleanup(self):
+        for acl_params in self._active_acls:
+            self.remove_acl(**acl_params)
+
+
+class KerberosUtils:
+
+    def __init__(self, docker):
+        self._docker = docker
+
+    def create_keytab(
+            self, principal="client/localhost",
+            password="aiokafka",
+            keytab_file="client.keytab"):
+
+        scripts_dir = pathlib.Path("docker/scripts/krb5.conf")
+        os.environ["KRB5_CONFIG"] = str(scripts_dir.absolute())
+
+        keytab_dir = pathlib.Path('tests/keytab')
+        if keytab_dir.exists():
+            shutil.rmtree(str(keytab_dir))
+
+        keytab_dir.mkdir()
+
+        if sys.platform == 'darwin':
+            subprocess.run(
+                ['ktutil', '-k', keytab_file,
+                 'add',
+                 '-p', principal,
+                 '-V', '1',
+                 '-e', 'aes256-cts-hmac-sha1-96',
+                 '-w', password],
+                cwd=str(keytab_dir.absolute()), check=True)
+        elif sys.platform != 'win32':
+            input_data = (
+                "add_entry -password -p {principal} -k 1 "
+                "-e aes256-cts-hmac-sha1-96\n"
+                "{password}\n"
+                "write_kt {keytab_file}\n"
+            ).format(
+                principal=principal,
+                password=password,
+                keytab_file=keytab_file)
+            subprocess.run(
+                ['ktutil'],
+                cwd=str(keytab_dir.absolute()),
+                input=input_data.encode(), check=True)
+        else:
+            raise NotImplementedError
+
+        self.keytab = keytab_dir / keytab_file
+
+    def kinit(self, principal):
+        assert self.keytab
+        subprocess.run(
+            ['kinit', '-kt', str(self.keytab.absolute()), principal],
+            check=True)
+
+    def kdestroy(self):
+        assert self.keytab
+        subprocess.run(
+            ['kdestroy', '-A'],
+            check=True)
 
 
 @pytest.mark.usefixtures('setup_test_class')
@@ -163,37 +308,39 @@ class KafkaIntegrationTestCase(unittest.TestCase):
     def add_cleanup(self, cb_or_coro, *args, **kw):
         self._cleanup.append((cb_or_coro, args, kw))
 
-    @asyncio.coroutine
-    def wait_topic(self, client, topic):
+    async def wait_topic(self, client, topic):
         client.add_topic(topic)
         for i in range(5):
-            ok = yield from client.force_metadata_update()
+            ok = await client.force_metadata_update()
             if ok:
                 ok = topic in client.cluster.topics()
             if not ok:
-                yield from asyncio.sleep(1, loop=self.loop)
+                await asyncio.sleep(1, loop=self.loop)
             else:
                 return
         raise AssertionError('No topic "{}" exists'.format(topic))
 
-    @asyncio.coroutine
-    def send_messages(self, partition, messages, *, topic=None,
-                      timestamp_ms=None, return_inst=False):
+    async def send_messages(
+        self, partition, messages, *, topic=None,
+        timestamp_ms=None, return_inst=False, headers=None
+    ):
         topic = topic or self.topic
         ret = []
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts)
-        yield from producer.start()
+        await producer.start()
         try:
-            yield from self.wait_topic(producer.client, topic)
+            await self.wait_topic(producer.client, topic)
+
             for msg in messages:
                 if isinstance(msg, str):
                     msg = msg.encode()
                 elif isinstance(msg, int):
                     msg = str(msg).encode()
-                future = yield from producer.send(
-                    topic, msg, partition=partition, timestamp_ms=timestamp_ms)
-                resp = yield from future
+                future = await producer.send(
+                    topic, msg, partition=partition,
+                    timestamp_ms=timestamp_ms, headers=headers)
+                resp = await future
                 self.assertEqual(resp.topic, topic)
                 self.assertEqual(resp.partition, partition)
                 if return_inst:
@@ -201,7 +348,7 @@ class KafkaIntegrationTestCase(unittest.TestCase):
                 else:
                     ret.append(msg)
         finally:
-            yield from producer.stop()
+            await producer.stop()
         return ret
 
     def assert_message_count(self, messages, num_messages):
@@ -212,22 +359,13 @@ class KafkaIntegrationTestCase(unittest.TestCase):
         self.assertEqual(len(set(messages)), num_messages)
 
     def create_ssl_context(self):
-        return create_ssl_context(
+        context = create_ssl_context(
             cafile=str(self.ssl_folder / "ca-cert"),
             certfile=str(self.ssl_folder / "cl_client.pem"),
             keyfile=str(self.ssl_folder / "cl_client.key"),
             password="abcdefgh")
-
-    def assertLogs(self, *args, **kw):  # noqa
-        if sys.version_info >= (3, 4, 0):
-            return super().assertLogs(*args, **kw)
-        else:
-            # On Python3.3 just do no-op for now
-            return self._assert_logs_noop()
-
-    @contextmanager
-    def _assert_logs_noop(self):
-        yield
+        context.check_hostname = False
+        return context
 
 
 def random_string(length):

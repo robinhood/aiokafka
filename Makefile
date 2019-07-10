@@ -1,8 +1,8 @@
 # Some simple testing tasks (sorry, UNIX only).
 
 FLAGS=
-SCALA_VERSION?=2.11
-KAFKA_VERSION?=0.10.2.1
+SCALA_VERSION?=2.12
+KAFKA_VERSION?=2.1.0
 DOCKER_IMAGE=aiolibs/kafka:$(SCALA_VERSION)_$(KAFKA_VERSION)
 DIFF_BRANCH=origin/master
 
@@ -15,14 +15,20 @@ flake:
 	flake8 aiokafka tests $$extra
 
 test: flake
-	py.test -s --no-print-logs --docker-image $(DOCKER_IMAGE) $(FLAGS) -Wdefault tests
+	py.test -s --no-print-logs --docker-image $(DOCKER_IMAGE) $(FLAGS) tests
 
 vtest: flake
-	py.test -s -v --no-print-logs --docker-image $(DOCKER_IMAGE) $(FLAGS) -Wdefault tests
+	py.test -s -v --docker-image $(DOCKER_IMAGE) $(FLAGS) tests
 
 cov cover coverage: flake
 	py.test -s --cov aiokafka --cov-report html --docker-image $(DOCKER_IMAGE) $(FLAGS) tests
 	@echo "open file://`pwd`/htmlcov/index.html"
+
+ci-test-unit:
+	py.test -s --cov aiokafka --cov-report html $(FLAGS) tests
+
+ci-test-all:
+	py.test -s --cov aiokafka --cov-report html --docker-image $(DOCKER_IMAGE) $(FLAGS) -k sasl tests
 
 coverage.xml: .coverage
 	coverage xml
@@ -48,8 +54,11 @@ clean:
 	rm -rf docs/_build/
 	rm -rf cover
 	rm -rf dist
-	rm -f aiokafka/record/_*.c
-	rm -f aiokafka/record/_*.html
+	rm -f aiokafka/record/_crecords/cutil.c
+	rm -f aiokafka/record/_crecords/default_records.c
+	rm -f aiokafka/record/_crecords/legacy_records.c
+	rm -f aiokafka/record/_crecords/memory_records.c
+	rm -f aiokafka/record/_crecords/*.html
 
 doc:
 	make -C docs html

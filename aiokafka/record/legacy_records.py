@@ -76,6 +76,10 @@ class LegacyRecordBase:
 
 class _LegacyRecordBatchPy(LegacyRecordBase):
 
+    is_control_batch = False
+    is_transactional = False
+    producer_id = None
+
     def __init__(self, buffer, magic):
         self._buffer = memoryview(buffer)
         self._magic = magic
@@ -107,6 +111,10 @@ class _LegacyRecordBatchPy(LegacyRecordBase):
     @property
     def compression_type(self):
         return self._attributes & self.CODEC_MASK
+
+    @property
+    def next_offset(self):
+        return self._offset + 1
 
     def validate_crc(self):
         crc = crc32(self._buffer[self.MAGIC_OFFSET:])
@@ -214,12 +222,12 @@ class _LegacyRecordBatchPy(LegacyRecordBase):
                     offset += absolute_base_offset
 
                 key, value = self._read_key_value(msg_pos + key_offset)
-                yield LegacyRecord(
+                yield _LegacyRecordPy(
                     offset, timestamp, timestamp_type,
                     key, value, crc)
         else:
             key, value = self._read_key_value(key_offset)
-            yield LegacyRecord(
+            yield _LegacyRecordPy(
                 self._offset, self._timestamp, timestamp_type,
                 key, value, self._crc)
 
@@ -292,7 +300,7 @@ class _LegacyRecordBatchBuilderPy(LegacyRecordBase):
         self._msg_buffers = []
         self._pos = 0
 
-    def append(self, offset, timestamp, key, value):
+    def append(self, offset, timestamp, key, value, headers=None):
         """ Append message to batch.
         """
         if self._magic == 0:
@@ -317,7 +325,7 @@ class _LegacyRecordBatchBuilderPy(LegacyRecordBase):
                 msg_buf, offset, timestamp, key_size, key, value_size, value)
             self._msg_buffers.append(msg_buf)
             self._pos += size
-            return LegacyRecordMetadata(offset, crc, size, timestamp)
+            return _LegacyRecordMetadataPy(offset, crc, size, timestamp)
 
         except struct.error:
             # perform expensive type checking only to translate struct errors
@@ -481,17 +489,17 @@ if NO_EXTENSIONS:
     LegacyRecord = _LegacyRecordPy
 else:
     try:
-        from ._legacy_records import (
-            _LegacyRecordBatchBuilderCython,
+        from ._crecords import (
+            LegacyRecordBatchBuilder as _LegacyRecordBatchBuilderCython,
             LegacyRecordMetadata as _LegacyRecordMetadataCython,
-            _LegacyRecordBatchCython,
+            LegacyRecordBatch as _LegacyRecordBatchCython,
             LegacyRecord as _LegacyRecordCython
         )
         LegacyRecordBatchBuilder = _LegacyRecordBatchBuilderCython
         LegacyRecordMetadata = _LegacyRecordMetadataCython
         LegacyRecordBatch = _LegacyRecordBatchCython
         LegacyRecord = _LegacyRecordCython
-    except ImportError as err:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         LegacyRecordBatchBuilder = _LegacyRecordBatchBuilderPy
         LegacyRecordMetadata = _LegacyRecordMetadataPy
         LegacyRecordBatch = _LegacyRecordBatchPy

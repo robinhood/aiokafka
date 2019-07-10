@@ -21,8 +21,9 @@
 
 from aiokafka.errors import CorruptRecordException
 
-from ._legacy_records cimport _LegacyRecordBatchCython as LegacyRecordBatch
-from aiokafka.record cimport _hton as hton
+from .default_records cimport DefaultRecordBatch
+from .legacy_records cimport LegacyRecordBatch
+from . cimport hton
 from cpython cimport PyBytes_GET_SIZE, PyBytes_AS_STRING, Py_buffer,\
     PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 
@@ -37,7 +38,7 @@ DEF MAGIC_OFFSET = 16
 DEF RECORD_OVERHEAD_V0 = 14
 
 
-cdef class _MemoryRecordsCython:
+cdef class MemoryRecords:
 
     cdef:
         bytes _buffer
@@ -50,7 +51,7 @@ cdef class _MemoryRecordsCython:
     def size_in_bytes(self):
         return PyBytes_GET_SIZE(self._buffer)
 
-    cdef LegacyRecordBatch _get_next(self):
+    cdef object _get_next(self):
         cdef:
             Py_ssize_t buffer_len
             char* buf
@@ -78,9 +79,12 @@ cdef class _MemoryRecordsCython:
             return None
 
         self._pos = slice_end
+
         magic = buf[MAGIC_OFFSET]
-        assert magic < 2
-        return LegacyRecordBatch.new(self._buffer, pos, slice_end, magic)
+        if magic < 2:
+            return LegacyRecordBatch.new(self._buffer, pos, slice_end, magic)
+        else:
+            return DefaultRecordBatch.new(self._buffer, pos, slice_end, magic)
 
     def has_next(self):
         cdef:
