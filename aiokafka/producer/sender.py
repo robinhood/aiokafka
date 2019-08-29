@@ -175,7 +175,7 @@ class Sender:
         except (ProducerFenced, OutOfOrderSequenceNumber,
                 TransactionalIdAuthorizationFailed):
             raise
-        except Exception:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover
             log.error("Unexpected error in sender routine", exc_info=True)
             if self._on_irrecoverable_error:
                 res = self._on_irrecoverable_error(exc)
