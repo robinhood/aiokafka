@@ -876,6 +876,7 @@ class Fetcher:
                     timeout=None if remaining == float("inf") else remaining,
                     loop=self._loop
                 )
+                return offsets
             except asyncio.TimeoutError:
                 break
             except Errors.KafkaError as error:
@@ -888,8 +889,6 @@ class Fetcher:
                 if remaining < self._retry_backoff:
                     break
                 await asyncio.sleep(self._retry_backoff, loop=self._loop)
-            else:
-                return offsets
         raise KafkaTimeoutError(
             "Failed to get offsets by times in %s ms" % timeout_ms)
 
