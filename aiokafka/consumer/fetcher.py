@@ -987,6 +987,7 @@ class Fetcher:
                         "Attempt to fetch offsets for partition %s ""failed "
                         "due to obsolete leadership information, retrying.",
                         partition)
+                    self._client.force_metadata_update()
                     raise error_type(partition)
                 elif error_type is Errors.UnknownTopicOrPartitionError:
                     log.warning(
