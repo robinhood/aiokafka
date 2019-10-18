@@ -685,14 +685,6 @@ class Fetcher:
                 error_type = Errors.for_code(error_code)
                 fetch_offset = fetch_offsets[tp]
                 tp_state = assignment.state_value(tp)
-                if not tp_state.has_valid_position or \
-                        tp_state.position != fetch_offset:
-                    log.debug(
-                        "Discarding fetch response for partition %s "
-                        "since its offset %s does not match the current "
-                        "position", tp, fetch_offset)
-                    continue
-
                 if error_type is Errors.NoError:
                     if request.API_VERSION >= 4:
                         aborted_transactions = part_data[-2]
@@ -700,8 +692,16 @@ class Fetcher:
                     else:
                         aborted_transactions = None
                         lso = None
+
                     tp_state.highwater = highwater
                     tp_state.lso = lso
+                    if not tp_state.has_valid_position or \
+                            tp_state.position != fetch_offset :
+                        log.debug(
+                            "Discarding fetch response for partition %s "
+                            "since its offset %s does not match the current "
+                            "position", tp, fetch_offset)
+                        continue
 
                     # part_data also contains lso, aborted_transactions.
                     # message_set is last
