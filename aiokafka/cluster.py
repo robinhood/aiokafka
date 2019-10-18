@@ -27,7 +27,7 @@ class ClusterMetadata(BaseClusterMetadata):
         """
         if purpose in self._coordinator_by_key:
             old_id = self._coordinator_by_key.pop(purpose)
-            del self._coordinators[old_id]
+            self._coordinators.pop(old_id, None)
 
         self._coordinators[node_id] = BrokerMetadata(node_id, host, port, rack)
         self._coordinator_by_key[purpose] = node_id
