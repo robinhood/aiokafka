@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import logging
+import os
 import random
 from itertools import chain
 
@@ -14,6 +15,8 @@ from aiokafka.record.memory_records import MemoryRecords
 from aiokafka.record.control_record import ControlRecord, ABORT_MARKER
 from aiokafka.structs import OffsetAndTimestamp, TopicPartition, ConsumerRecord
 from aiokafka.util import ensure_future, create_future
+
+LOG_UNKNOWN_OFFSET = bool(os.environ.get('LOG_UNKNOWN_OFFSET', ''))
 
 log = logging.getLogger(__name__)
 
@@ -971,6 +974,8 @@ class Fetcher:
                                 "%s. Fetched offset %s", partition, offset)
                             res_offsets[partition] = (offset, None)
                         else:
+                            self._log_offset(partition, UNKNOWN_OFFSET,
+                                             'default')
                             res_offsets[partition] = (UNKNOWN_OFFSET, None)
                     else:
                         timestamp, offset = partition_info
@@ -978,6 +983,7 @@ class Fetcher:
                             "Handling ListOffsetResponse response for "
                             "%s. Fetched offset %s, timestamp %s",
                             partition, offset, timestamp)
+                        self._log_offset(partition, offset)
                         res_offsets[partition] = (offset, timestamp)
                 elif error_type is Errors.UnsupportedForMessageFormatError:
                     # The message format on the broker side is before 0.10.0,
@@ -1005,6 +1011,11 @@ class Fetcher:
                         "to: %s", partition, error_type)
                     raise error_type(partition)
         return res_offsets
+
+    def _log_offset(self, partition, offset, source='broker'):
+        if LOG_UNKNOWN_OFFSET and offset == UNKNOWN_OFFSET:
+            log.warn('Unknown offset for topic %r (source=%s)',
+                     partition, source)
 
     @asyncio.coroutine
     def next_record(self, partitions):
