@@ -1,5 +1,7 @@
 import collections
+import heapq
 import logging
+import random
 import time
 
 from kafka.cluster import ClusterMetadata as BaseClusterMetadata
@@ -9,13 +11,36 @@ from aiokafka import errors as Errors
 log = logging.getLogger(__name__)
 
 
+class BrokerIndex:
+
+    def __init__(self) -> None:
+        self._ids = []
+
+    def __next__(self) -> int:
+        heap = self._ids
+        if heap:
+            count, entropy, node_id = heap[0]
+            heapq.heapreplace(heap, (count + 1, entropy, node_id))
+            return node_id
+
+    def update(self, brokers) -> None:
+        for broker in brokers.values():
+            heapq.heappush(self._ids,
+                           (0, random.randint(1, 100), broker.nodeId))
+
+
+
 class ClusterMetadata(BaseClusterMetadata):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
         self._coordinators = {}
         self._coordinator_by_key = {}
+        self._broker_index = BrokerIndex()
         self.missing_autocreate_topics = set()
+
+    def get_random_node(self):
+        return next(self._broker_index)
 
     def coordinator_metadata(self, node_id):
         return self._coordinators.get(node_id)
@@ -101,6 +126,7 @@ class ClusterMetadata(BaseClusterMetadata):
                 log.error("Error fetching metadata for topic %s: %s",
                           topic, error_type)
 
+
         with self._lock:
             self._brokers = _new_brokers
             self.controller = _new_controller
@@ -108,6 +134,7 @@ class ClusterMetadata(BaseClusterMetadata):
             self._broker_partitions = _new_broker_partitions
             self.unauthorized_topics = _new_unauthorized_topics
             self.internal_topics = _new_internal_topics
+            self._broker_index.update(self._brokers)
 
         now = time.time() * 1000
         self._last_refresh_ms = now

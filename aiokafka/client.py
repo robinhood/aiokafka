@@ -270,10 +270,7 @@ class AIOKafkaClient:
         Returns:
             nodeId - identifier of broker
         """
-        nodeids = [b.nodeId for b in self.cluster.brokers()]
-        if not nodeids:
-            return None
-        return random.choice(nodeids)
+        return self.cluster.get_random_node()
 
     async def _metadata_update(self, cluster_metadata, topics):
         assert isinstance(cluster_metadata, ClusterMetadata)
