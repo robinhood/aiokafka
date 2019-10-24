@@ -407,8 +407,14 @@ class AIOKafkaClient:
                         'Broker id %s not in current metadata' % node_id)
             else:
                 broker = self.cluster.coordinator_metadata(node_id)
-                assert broker is not None
-
+                # XXX: earlier we only did an assert here, but it seems it's
+                # possible to get a leader that is for some reason not in
+                # metadata.
+                # I think requerying metadata should solve this problem
+                if broker is None :
+                    raise StaleMetadata(
+                        'Broker id %s not in current metadata' % node_id)
+                
             log.debug("Initiating connection to node %s at %s:%s",
                       node_id, broker.host, broker.port)
 
