@@ -251,7 +251,8 @@ class AIOKafkaConsumer(object):
                  sasl_kerberos_domain_name=None,
                  traced_from_parent_span=None,
                  start_rebalancing_span=None,
-                 start_coordinator_span=None):
+                 start_coordinator_span=None,
+                 on_generation_id_known=None):
         if max_poll_records is not None and (
                 not isinstance(max_poll_records, int) or max_poll_records < 1):
             raise ValueError("`max_poll_records` should be positive Integer")
@@ -298,6 +299,7 @@ class AIOKafkaConsumer(object):
         self._traced_from_parent_span = traced_from_parent_span
         self._start_rebalancing_span = start_rebalancing_span
         self._start_coordinator_span = start_coordinator_span
+        self._on_generation_id_known = on_generation_id_known
 
         self._check_crcs = check_crcs
         self._subscription = SubscriptionState(loop=loop)
@@ -386,6 +388,7 @@ class AIOKafkaConsumer(object):
                 traced_from_parent_span=self._traced_from_parent_span,
                 start_rebalancing_span=self._start_rebalancing_span,
                 start_coordinator_span=self._start_coordinator_span,
+                on_generation_id_known=self._on_generation_id_known,
             )
             if self._subscription.subscription is not None:
                 if self._subscription.partitions_auto_assigned():
