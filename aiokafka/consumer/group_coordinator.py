@@ -51,6 +51,9 @@ class BaseCoordinator(object):
     def on_generation_id_known(self):
         ...
 
+    def flush_spans(self):
+        ...
+
     def _handle_metadata_update(self, cluster):
         subscription = self._subscription
         if subscription.subscribed_pattern:
@@ -226,6 +229,7 @@ class GroupCoordinator(BaseCoordinator):
                  start_rebalancing_span=None,
                  start_coordinator_span=None,
                  on_generation_id_known=None,
+                 flush_spans=None,
                  ):
         """Initialize the coordination manager.
 
@@ -250,6 +254,7 @@ class GroupCoordinator(BaseCoordinator):
         self._start_rebalancing_span = start_rebalancing_span
         self._start_coordinator_span = start_coordinator_span
         self._on_generation_id_known = on_generation_id_known
+        self._flush_spans = flush_spans
 
         self.generation = OffsetCommitRequest.DEFAULT_GENERATION_ID
         self.member_id = JoinGroupRequest[0].UNKNOWN_MEMBER_ID
@@ -302,6 +307,16 @@ class GroupCoordinator(BaseCoordinator):
             return self._start_rebalancing_span()
         else:
             return nullcontext()
+
+    def set_rebalancing_tag(self, key, value):
+        span = self._rebalancing_span
+        if span is not None:
+            try:
+                set_tag = span.set_tag
+            except AttributeError:
+                pass
+            else:
+                set_tag(key, value)
 
     def start_coordinator_span(self):
         if self._start_coordinator_span is not None:
@@ -563,50 +578,68 @@ class GroupCoordinator(BaseCoordinator):
             subscription.assignment is None or self._rejoin_needed_fut.done()
         )
 
-    async def ensure_coordinator_known(self):
+    async def ensure_coordinator_known(self, trace_span=None):
         """ Block until the coordinator for this group is known.
         """
         if self.coordinator_id is not None:
             return
 
-        with self.start_coordinator_span() as span:
-            T = self.traced_from_parent_span(span)
+        set_tag = self.set_rebalancing_tag
+        if trace_span is not None:
+            T = self.traced_from_parent_span(lazy=True)
+        else:
+            T = lambda f: f
 
-            async with self._coordinator_lookup_lock:
-                retry_backoff = self._retry_backoff_ms / 1000
-                while self.coordinator_id is None:
-                    try:
-                        coordinator_id = (
-                            await T(self._client.coordinator_lookup)(
-                                CoordinationType.GROUP, self.group_id)
-                        )
-                    except Errors.GroupAuthorizationFailedError:
-                        err = Errors.GroupAuthorizationFailedError(
-                            self.group_id)
-                        raise err
-                    except Errors.KafkaError as err:
-                        log.error("Group Coordinator Request failed: %s", err)
-                        if err.retriable:
-                            await T(self._client.force_metadata_update)()
-                            await T(asyncio.sleep)(
-                                retry_backoff, loop=self._loop)
-                            continue
-                        else:
-                            raise
-
-                    # Try to connect to confirm that the connection can be
-                    # established.
-                    ready = await T(self._client.ready)(
-                        coordinator_id, group=ConnectionGroup.COORDINATION)
-                    if not ready:
+        try:
+            await T(self._coordinator_lookup_lock.acquire)()
+            retry_backoff = self._retry_backoff_ms / 1000
+            i = 0
+            while self.coordinator_id is None:
+                try:
+                    coordinator_id = (
+                        await T(self._client.coordinator_lookup)(
+                            CoordinationType.GROUP, self.group_id)
+                    )
+                except Errors.GroupAuthorizationFailedError as exc:
+                    set_tag("coord_lookup_error", "Group authorization failed.")
+                    set_tag("coord_lookup_exc", repr(exc))
+                    err = Errors.GroupAuthorizationFailedError(
+                        self.group_id)
+                    raise err
+                except Errors.KafkaError as err:
+                    log.error("Group Coordinator Request failed: %s", err)
+                    if err.retriable:
+                        set_tag(f"coord_lookup_error_{i}", "Request failed")
+                        set_tag(f"coord_lookup_exc_{i}", repr(err))
+                        await T(self._client.force_metadata_update)()
                         await T(asyncio.sleep)(
                             retry_backoff, loop=self._loop)
+                        i += 1
                         continue
+                    else:
+                        set_tag("coord_lookup_error", "Request failed")
+                        set_tag("coord_lookup_exc", repr(err))
+                        raise
 
-                    self.coordinator_id = coordinator_id
-                    self._coordinator_dead_fut = create_future(loop=self._loop)
-                    log.info("Discovered coordinator %s for group %s",
-                            self.coordinator_id, self.group_id)
+                # Try to connect to confirm that the connection can be
+                # established.
+                ready = await T(self._client.ready)(
+                    coordinator_id, group=ConnectionGroup.COORDINATION)
+                if not ready:
+                    await T(asyncio.sleep)(
+                        retry_backoff, loop=self._loop)
+                    i += 1
+                    continue
+
+                set_tag("coordinator_ready", True)
+
+                self.coordinator_id = coordinator_id
+                self._coordinator_dead_fut = create_future(loop=self._loop)
+                log.info("Discovered coordinator %s for group %s",
+                    self.coordinator_id, self.group_id)
+        finally:
+            set_tag("coord_lookup_retry_count", i)
+            T(self._coordinator_lookup_lock.release)()
 
     async def _coordination_routine(self):
         try:
@@ -652,16 +685,22 @@ class GroupCoordinator(BaseCoordinator):
 
                 # Ensure active group
                 try:
-                    await self.ensure_coordinator_known()
-                    if auto_assigned and self.need_rejoin(subscription):
-                        new_assignment = await self.ensure_active_group(
-                            subscription, assignment)
-                        if new_assignment is None:
-                            continue
+                    with self.start_rebalancing_span() as span:
+                        self._rebalancing_span = span
+                        T = self.traced_from_parent_span(span, lazy=True)
+                        if self.coordinator_id is None:
+                            await T(self.ensure_coordinator_known)(
+                                trace_span=span)
+                        if auto_assigned and self.need_rejoin(subscription):
+                            new_assignment = await T(self.ensure_active_group)(
+                                subscription, assignment)
+                            if new_assignment is None:
+                                self.flush_spans()
+                                continue
+                            else:
+                                assignment = new_assignment
                         else:
-                            assignment = new_assignment
-                    else:
-                        assignment = subscription.assignment
+                            assignment = subscription.assignment
 
                     assert assignment is not None and assignment.active
 
@@ -675,6 +714,8 @@ class GroupCoordinator(BaseCoordinator):
                 except Errors.KafkaError as exc:
                     await self._push_error_to_user(exc)
                     continue
+                finally:
+                    self._rebalancing_span = None
 
                 futures = [
                     self._closing,  # Will exit fast if close() called
@@ -728,11 +769,13 @@ class GroupCoordinator(BaseCoordinator):
         if self._on_generation_id_known:
             return self._on_generation_id_known()
 
+    def flush_spans(self):
+        if self._flush_spans is not None:
+            self._flush_spans()
 
     async def ensure_active_group(self, subscription, prev_assignment):
-        with self.start_rebalancing_span() as span:
-            T = self.traced_from_parent_span(span, lazy=True)
-            await T(self.REPLACE_WITH_MEMBER_ID)(subscription, prev_assignment)
+        T = self.traced_from_parent_span(lazy=True)
+        await T(self.REPLACE_WITH_MEMBER_ID)(subscription, prev_assignment)
 
     async def REPLACE_WITH_MEMBER_ID(self, subscription, prev_assignment):
         # due to a race condition between the initial metadata
@@ -1262,6 +1305,9 @@ class CoordinatorGroupRebalance:
         # send a join group request to the coordinator
         log.info("(Re-)joining group %s", self.group_id)
 
+        T = self._coordinator.traced_from_parent_span(lazy=True)
+        set_tag = self._coordinator.set_rebalancing_tag
+
         topics = self._subscription.topics
         metadata_list = []
         for assignor in self._assignors:
@@ -1299,7 +1345,7 @@ class CoordinatorGroupRebalance:
         log.debug("Sending JoinGroup (%s) to coordinator %s",
                   request, self.coordinator_id)
         try:
-            response = await self._coordinator._send_req(request)
+            response = await T(self._coordinator._send_req)(request)
         except Errors.KafkaError:
             # Return right away. It's a connection error, so backoff will be
             # handled by coordinator lookup
@@ -1322,9 +1368,11 @@ class CoordinatorGroupRebalance:
             if response.leader_id == response.member_id:
                 log.info("Elected group leader -- performing partition"
                          " assignments using %s", protocol)
-                assignment_bytes = await self._on_join_leader(response)
+                set_tag('is_leader', True)
+                assignment_bytes = await T(self._on_join_leader)(response)
             else:
-                assignment_bytes = await self._on_join_follower()
+                set_tag('is_leader', False)
+                assignment_bytes = await T(self._on_join_follower)()
 
             if assignment_bytes is None:
                 return None
@@ -1334,10 +1382,14 @@ class CoordinatorGroupRebalance:
             log.debug("Attempt to join group %s rejected since coordinator %s"
                       " is loading the group.", self.group_id,
                       self.coordinator_id)
-            await asyncio.sleep(
+            set_tag('rebalance_error', 'Coordinator is loading group.')
+            set_tag('rebalance_exc', repr(error_type))
+            await T(asyncio.sleep)(
                 self._retry_backoff_ms / 1000, loop=self._loop)
         elif error_type is Errors.UnknownMemberIdError:
             # reset the member id and retry immediately
+            set_tag('rebalance_error', 'Unknown member id.')
+            set_tag('rebalance_exc', repr(error_type))
             self._coordinator.reset_generation()
             log.debug(
                 "Attempt to join group %s failed due to unknown member id",
@@ -1345,6 +1397,8 @@ class CoordinatorGroupRebalance:
         elif error_type in (Errors.GroupCoordinatorNotAvailableError,
                             Errors.NotCoordinatorForGroupError):
             # Coordinator changed we should be able to find it immediately
+            set_tag('rebalance_error', 'Coordinator obsolete')
+            set_tag('rebalance_exc', repr(error_type))
             err = error_type()
             self._coordinator.coordinator_dead()
             log.debug("Attempt to join group %s failed due to obsolete "
@@ -1354,12 +1408,18 @@ class CoordinatorGroupRebalance:
                             Errors.InvalidSessionTimeoutError,
                             Errors.InvalidGroupIdError):
             err = error_type()
+            set_tag('rebalance_error', 'Fatal error.')
+            set_tag('rebalance_exc', repr(error_type))
             log.error(
                 "Attempt to join group failed due to fatal error: %s", err)
             raise err
         elif error_type is Errors.GroupAuthorizationFailedError:
+            set_tag('rebalance_error', 'Group authorization failed.')
+            set_tag('rebalance_exc', repr(error_type))
             raise error_type(self.group_id)
         else:
+            set_tag('rebalance_error', 'Unexpected error!')
+            set_tag('rebalance_exc', repr(error_type))
             err = error_type()
             log.error(
                 "Unexpected error in join group '%s' response: %s",
@@ -1370,6 +1430,7 @@ class CoordinatorGroupRebalance:
 
     async def _on_join_follower(self):
         # send follower's sync group with an empty assignment
+        T = self._coordinator.traced_from_parent_span(lazy=True)
         version = 0 if self._api_version < (0, 11, 0) else 1
         request = SyncGroupRequest[version](
             self.group_id,
@@ -1379,7 +1440,7 @@ class CoordinatorGroupRebalance:
         log.debug(
             "Sending follower SyncGroup for group %s to coordinator %s: %s",
             self.group_id, self.coordinator_id, request)
-        return (await self._send_sync_group_request(request))
+        return await T(self._send_sync_group_request)(request)
 
     async def _on_join_leader(self, response):
         """
@@ -1392,9 +1453,10 @@ class CoordinatorGroupRebalance:
         Returns:
             Future: resolves to member assignment encoded-bytes
         """
+        T = self._coordinator.traced_from_parent_span(lazy=True)
         try:
             group_assignment = \
-                await self._coordinator._perform_assignment(
+                await T(self._coordinator._perform_assignment)(
                     response.leader_id,
                     response.group_protocol,
                     response.members)
@@ -1417,24 +1479,29 @@ class CoordinatorGroupRebalance:
         log.debug(
             "Sending leader SyncGroup for group %s to coordinator %s: %s",
             self.group_id, self.coordinator_id, request)
-        return (await self._send_sync_group_request(request))
+        return await T(self._send_sync_group_request)(request)
 
     async def _send_sync_group_request(self, request):
         # We need to reset the rejoin future right after the assignment to
         # capture metadata changes after join group was performed. We do not
         # set it directly after JoinGroup to avoid a false rejoin in case
         # ``_perform_assignment()`` does a metadata update.
+        T = self._coordinator.traced_from_parent_span(lazy=True)
+        set_tag = self._coordinator.set_rebalancing_tag
         self._coordinator._rejoin_needed_fut = create_future(loop=self._loop)
         try:
-            response = await self._coordinator._send_req(request)
-        except Errors.KafkaError:
+            response = await T(self._coordinator._send_req)(request)
+        except Errors.KafkaError as exc:
             # We lost connection to coordinator. No need to try and finish this
             # group join, just rejoin again.
+            set_tag('sync_group_error', 'Lost connection to coordinator')
+            set_tag('sync_group_exc', repr(exc))
             self._coordinator.request_rejoin()
             return None
 
         error_type = Errors.for_code(response.error_code)
         if error_type is Errors.NoError:
+            set_tag('sync_group_success', True)
             log.info("Successfully synced group %s with generation %s",
                      self.group_id, self._coordinator.generation)
             return response.member_assignment
@@ -1442,24 +1509,34 @@ class CoordinatorGroupRebalance:
         # Error case
         self._coordinator.request_rejoin()
         if error_type is Errors.RebalanceInProgressError:
+            set_tag('sync_group_error', 'Rebalance in progress.')
+            set_tag('sync_group_exc', repr(error_type))
             log.debug("SyncGroup for group %s failed due to group"
                       " rebalance", self.group_id)
         elif error_type in (Errors.UnknownMemberIdError,
                             Errors.IllegalGenerationError):
             err = error_type()
+            set_tag('sync_group_error', 'SyncGroup failed (see _exc)')
+            set_tag('sync_group_exc', repr(error_type))
             log.debug("SyncGroup for group %s failed due to %s,",
                       self.group_id, err)
             self._coordinator.reset_generation()
         elif error_type in (Errors.GroupCoordinatorNotAvailableError,
                             Errors.NotCoordinatorForGroupError):
+            set_tag('sync_group_error', 'SyncGroup failed (see _exc)')
+            set_tag('sync_group_exc', repr(error_type))
             err = error_type()
             log.debug("SyncGroup for group %s failed due to %s",
                       self.group_id, err)
             self._coordinator.coordinator_dead()
         elif error_type is Errors.GroupAuthorizationFailedError:
+            set_tag('sync_group_error', 'Group authorization failed.')
+            set_tag('sync_group_exc', repr(error_type))
             raise error_type(self.group_id)
         else:
             err = error_type()
+            set_tag('sync_group_error', 'Unexpected error!')
+            set_tag('sync_group_exc', repr(error_type))
             log.error("Unexpected error from SyncGroup: %s", err)
             raise Errors.KafkaError(repr(err))
 
