@@ -278,6 +278,13 @@ class AIOKafkaProducer(object):
                 context['source_traceback'] = self._source_traceback
             self._loop.call_exception_handler(context)
 
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, type, value, traceback):
+        await self.stop()
+
     async def start(self):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
