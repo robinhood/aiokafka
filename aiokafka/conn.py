@@ -523,8 +523,8 @@ class AIOKafkaConnection:
 
 class BaseSaslAuthenticator:
 
-    def step(self, payload):
-        return self._loop.run_in_executor(None, self._step, payload)
+    async def step(self, payload):
+        return await self._loop.run_in_executor(None, self._step, payload)
 
     def _step(self, payload):
         """ Process next token in sequence and return with:
