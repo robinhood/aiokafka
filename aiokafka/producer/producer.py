@@ -165,6 +165,13 @@ class BaseProducer(abc.ABC):
     def _ensure_transactional(self):
         ...
 
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, type, value, traceback):
+        await self.stop()
+
     async def start(self):
         """Connect to Kafka cluster and check server version"""
         log.debug("Starting the Kafka producer")  # trace
