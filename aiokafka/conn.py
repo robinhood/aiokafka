@@ -157,6 +157,8 @@ class AIOKafkaConnection:
         if loop.get_debug():
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
 
+    # Warn and try to close. We can close synchroniously, so will attempt
+    # that
     def __del__(self, _warnings=warnings):
         if self.connected():
             if PY_36:
@@ -458,6 +460,7 @@ class AIOKafkaConnection:
             functools.partial(self._on_read_task_error, self_ref))
         return read_task
 
+    @classmethod
     async def _read(cls, self_ref):
         # XXX: I know that it become a bit more ugly once cyclic references
         # were removed, but it's needed to allow connections to properly
@@ -520,7 +523,7 @@ class AIOKafkaConnection:
 
 class BaseSaslAuthenticator:
 
-    async def step(self, payload):
+    def step(self, payload):
         return self._loop.run_in_executor(None, self._step, payload)
 
     def _step(self, payload):
