@@ -44,6 +44,7 @@ class SubscriptionState:
     def __init__(self, *, loop: ALoop):
         self._subscription_waiters = []  # type: List[Future]
         self._assignment_waiters = []  # type: List[Future]
+        self._rebalancing_waiters = []  # type: List[Future]
         self._loop = loop  # type: ALoop
 
         # Fetch contexts
@@ -119,6 +120,12 @@ class SubscriptionState:
             raise IllegalStateError(
                 "No current assignment for partition {}".format(tp))
         return tp_state
+
+    def _notify_rebalancing_waiters(self):
+        for waiter in self._rebalancing_waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        self._rebalancing_waiters.clear()
 
     def _notify_subscription_waiters(self):
         for waiter in self._subscription_waiters:
@@ -248,6 +255,12 @@ class SubscriptionState:
         self._subscription_waiters.append(fut)
         return fut
 
+    def wait_for_rebalancing(self):
+        """ Wait for rebalancing to end. """
+        fut = create_future(loop=self._loop)
+        self._rebalancing_waiters.append(fut)
+        return fut
+
     def wait_for_assignment(self):
         """ Wait for next assignment. Be careful, as this will always wait for
         next assignment, even if the current one is active.
@@ -266,6 +279,7 @@ class SubscriptionState:
             if not waiter.done():
                 waiter.set_exception(copy.copy(exc))
         self._subscription_waiters.clear()
+        self._rebalancing_waiters.clear()
 
         for waiter in self._fetch_waiters:
             if not waiter.done():
@@ -400,12 +414,17 @@ class Assignment:
             self._tp_state[tp] = TopicPartitionState(self, loop=loop)
 
         self._loop = loop
+        self.rebalancing = True
         self.unassign_future = create_future(loop)
         self.commit_refresh_needed = Event(loop=loop)
 
     @property
     def tps(self):
         return self._topic_partitions
+
+    @property
+    def fetch_active(self):
+        return self.active and not self.rebalancing
 
     @property
     def active(self):
@@ -434,6 +453,14 @@ class Assignment:
             if tp_state._committed_futs:
                 requesting.append(tp)
         return requesting
+
+    def __repr__(self):
+        return '<{0}: active={1} rebalancing={2} num_tps={3}>'.format(
+            type(self).__name__,
+            self.active,
+            self.rebalancing,
+            len(self._topic_partitions),
+        )
 
 
 class PartitionStatus(Enum):

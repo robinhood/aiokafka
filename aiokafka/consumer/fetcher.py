@@ -484,7 +484,7 @@ class Fetcher:
             while True:
                 # If we lose assignment we just cancel all current tasks,
                 # wait for new assignment and restart the loop
-                if assignment is None or not assignment.active:
+                if assignment is None or not assignment.fetch_active:
                     for task in self._pending_tasks:
                         # Those tasks should have proper handling for
                         # cancellation
@@ -496,7 +496,8 @@ class Fetcher:
 
                     subscription = self._subscriptions.subscription
                     if subscription is None or \
-                            subscription.assignment is None:
+                            subscription.assignment is None or \
+                            not subscription.assignment.fetch_active:
                         try:
                             waiter = self._subscriptions.wait_for_assignment()
                             await waiter
@@ -504,8 +505,18 @@ class Fetcher:
                             # Critical coordination waiters will be passed
                             # to user, but fetcher can just ignore those
                             continue
-                    assignment = self._subscriptions.subscription.assignment
+                    subs = self._subscriptions
+                    assignment = subs.subscription.assignment
+                    if assignment.rebalancing:
+                        try:
+                            waiter = subs.wait_for_rebalancing()
+                            await waiter
+                        except Errors.KafkaError:
+                            # Critical coordination waiters will be passed
+                            # to user, but fetcher can just ignore those
+                            continue
                 assert assignment is not None and assignment.active
+                assert not assignment.rebalancing
 
                 # Reset consuming signal future.
                 self._wait_consume_future = create_future(loop=self._loop)
@@ -653,6 +664,8 @@ class Fetcher:
 
     async def _proc_fetch_request(self, assignment, node_id, request):
         needs_wakeup = False
+        if assignment.rebalancing:
+            return False
         try:
             response = await self._client.send(node_id, request)
         except Errors.KafkaError as err:
@@ -664,7 +677,7 @@ class Fetcher:
             # is no longer of interest.
             return False
 
-        if not assignment.active:
+        if not assignment.active or assignment.rebalancing:
             log.debug(
                 "Discarding fetch response since the assignment changed during"
                 " fetch")
@@ -672,12 +685,20 @@ class Fetcher:
 
         fetch_offsets = {}
         for topic, partitions in request.topics:
+            if assignment.rebalancing:
+                return False
             for partition, offset, _ in partitions:
+                if assignment.rebalancing:
+                    return False
                 fetch_offsets[TopicPartition(topic, partition)] = offset
 
         now_ms = int(1000 * time.time())
         for topic, partitions in response.topics:
+            if assignment.rebalancing:
+                return needs_wakeup
             for partition, error_code, highwater, *part_data in partitions:
+                if assignment.rebalancing:
+                    return needs_wakeup
                 tp = TopicPartition(topic, partition)
                 error_type = Errors.for_code(error_code)
                 fetch_offset = fetch_offsets[tp]
