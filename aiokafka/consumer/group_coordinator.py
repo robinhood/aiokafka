@@ -663,8 +663,6 @@ class GroupCoordinator(BaseCoordinator):
         assignment = None
 
         while not self._closing.done():
-            if subscription and subscription.assignment is not None:
-                subscription.assignment.rebalancing = True
             try:
                 # Check if there was a change to subscription
                 if subscription is not None and not subscription.active:
@@ -705,8 +703,6 @@ class GroupCoordinator(BaseCoordinator):
                             assignment = subscription.assignment
 
                     assert assignment is not None and assignment.active
-                    assignment.rebalancing = False
-                    self._subscription._notify_rebalancing_waiters()
 
                     # We will only try to commit offsets once here. In error
                     # case the returned wait_timeout will be ``retry_backoff``.
