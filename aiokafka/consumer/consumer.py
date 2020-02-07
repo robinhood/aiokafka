@@ -1250,3 +1250,11 @@ class AIOKafkaConsumer(object):
                 raise err
             except RecordTooLargeError:
                 log.exception("error in consumer iterator: %s")
+
+    @property
+    def records_last_request(self):
+        return self._fetcher.records_last_request
+
+    @property
+    def records_last_response(self):
+        return self._fetcher.records_last_response

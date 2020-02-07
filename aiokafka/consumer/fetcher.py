@@ -4,6 +4,7 @@ import logging
 import random
 import time
 from itertools import chain
+from time import monotonic
 
 from kafka.protocol.offset import OffsetRequest
 
@@ -383,6 +384,9 @@ class Fetcher:
         self._default_reset_strategy = OffsetResetStrategy.from_str(
             auto_offset_reset)
 
+        self.records_last_request = {}
+        self.records_last_response = {}
+
         if isolation_level == "read_uncommitted":
             self._isolation_level = READ_UNCOMMITTED
         elif isolation_level == "read_committed":
@@ -653,6 +657,17 @@ class Fetcher:
 
     async def _proc_fetch_request(self, assignment, node_id, request):
         needs_wakeup = False
+        request_topic_partitions = set()
+        fetch_offsets = {}
+        records_last_request = self.records_last_request
+        records_last_response = self.records_last_response
+        time_request = monotonic()
+        for topic, partitions in request.topics:
+            for partition, offset, _ in partitions:
+                tp = TopicPartition(topic, partition)
+                request_topic_partitions.add(tp)
+                fetch_offsets[tp] = offset
+                records_last_request[tp] = time_request
         try:
             response = await self._client.send(node_id, request)
         except Errors.KafkaError as err:
@@ -663,6 +678,7 @@ class Fetcher:
             # Either `close()` or partition unassigned. Either way the result
             # is no longer of interest.
             return False
+        time_response = monotonic()
 
         if not assignment.active:
             log.debug(
@@ -670,14 +686,10 @@ class Fetcher:
                 " fetch")
             return False
 
-        fetch_offsets = {}
-        for topic, partitions in request.topics:
-            for partition, offset, _ in partitions:
-                fetch_offsets[TopicPartition(topic, partition)] = offset
-
         now_ms = int(1000 * time.time())
         for topic, partitions in response.topics:
             for partition, error_code, highwater, *part_data in partitions:
+                records_last_response[tp] = time_response
                 tp = TopicPartition(topic, partition)
                 error_type = Errors.for_code(error_code)
                 fetch_offset = fetch_offsets[tp]
