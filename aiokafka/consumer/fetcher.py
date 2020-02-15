@@ -1062,6 +1062,7 @@ class Fetcher:
     async def fetched_records(self, partitions, timeout=0, max_records=None):
         """ Returns previously fetched records and updates consumed offsets.
         """
+        sleep = asyncio.sleep
         while True:
             # While the background routine will fetch new records up till new
             # assignment is finished, we don't want to return records, that may
@@ -1072,6 +1073,7 @@ class Fetcher:
             start_time = self._loop.time()
             drained = {}
             for tp in list(self._records.keys()):
+                await sleep(0)
                 if partitions and tp not in partitions:
                     # Cleanup results for unassigned partitons
                     if not self._subscriptions.is_assigned(tp):
