@@ -1079,7 +1079,7 @@ class Fetcher:
                     if not self._subscriptions.is_assigned(tp):
                         del self._records[tp]
                     continue
-                res_or_error = self._records[tp]
+                res_or_error = self._records.get(tp)
                 if type(res_or_error) == FetchResult:
                     records = res_or_error.getall(max_records)
                     if not res_or_error.has_more():
@@ -1101,9 +1101,9 @@ class Fetcher:
                         return drained
                     else:
                         # Remove error, so we can fetch on partition again
-                        del self._records[tp]
+                        self._records.pop(tp, None)
                         self._notify(self._wait_consume_future)
-                        res_or_error.check_raise()
+                        getattr(res_or_error, 'check_raise', lambda: None)()
 
             if drained or not timeout:
                 return drained
