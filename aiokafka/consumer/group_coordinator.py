@@ -808,7 +808,6 @@ class GroupCoordinator(BaseCoordinator):
         idle_time = self._subscription.fetcher_idle_time
         if idle_time >= self._max_poll_interval:
             await T(asyncio.sleep)(self._retry_backoff_ms / 1000)
-            return None
 
         # We will only try to perform the rejoin once. If it fails,
         # we will spin this loop another time, checking for coordinator
