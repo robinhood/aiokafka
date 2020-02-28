@@ -13,6 +13,7 @@ from aiokafka.conn import create_conn, CloseReason
 from aiokafka.cluster import ClusterMetadata
 from aiokafka.protocol.coordination import FindCoordinatorRequest
 from aiokafka.protocol.produce import ProduceRequest
+from aiokafka.protocol.group import SyncGroupRequest
 from aiokafka.errors import (
     KafkaError,
     ConnectionError,
@@ -566,6 +567,7 @@ class AIOKafkaClient:
         # in descending order. As soon as we find one that works, return it
         test_cases = [
             # format (<broker verion>, <needed struct>)
+            ((2, 3, 0), SyncGroupRequest[0].API_KEY, 3),
             ((2, 1, 0), MetadataRequest[0].API_KEY, 7),
             ((1, 1, 0), FetchRequest[0].API_KEY, 7),
             ((1, 0, 0), MetadataRequest[0].API_KEY, 5),
