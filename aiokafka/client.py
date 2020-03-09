@@ -16,7 +16,7 @@ from aiokafka.protocol.produce import ProduceRequest
 from aiokafka.protocol.group import SyncGroupRequest
 from aiokafka.errors import (
     KafkaError,
-    ConnectionError,
+    KafkaConnectionError,
     NodeNotReadyError,
     RequestTimedOutError,
     UnknownTopicOrPartitionError,
@@ -228,7 +228,7 @@ class AIOKafkaClient:
             log.debug('Received cluster metadata: %s', self.cluster)
             break
         else:
-            raise ConnectionError(
+            raise KafkaConnectionError(
                 'Unable to bootstrap from {}'.format(self.hosts))
 
         # detect api version if need
@@ -466,10 +466,10 @@ class AIOKafkaClient:
             request (Struct): request object (not-encoded)
 
         Raises:
-            kafka.common.RequestTimedOutError
-            kafka.common.NodeNotReadyError
-            kafka.common.ConnectionError
-            kafka.common.CorrelationIdError
+            kafka.errors.RequestTimedOutError
+            kafka.errors.NodeNotReadyError
+            kafka.errors.ConnectionError
+            kafka.errors.CorrelationIdError
 
         Returns:
             Future: resolves to Response struct
