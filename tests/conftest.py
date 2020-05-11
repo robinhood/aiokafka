@@ -177,7 +177,8 @@ if sys.platform != 'win32':
             },
             environment=environment,
             tty=True,
-            detach=True)
+            detach=True,
+            remove=True)
 
         yield (
             kafka_host, kafka_port, kafka_ssl_port, kafka_sasl_plain_port,
