@@ -3,7 +3,10 @@ CHANGES
 
 590.feature
 ^^^^^^^^^^^
+
 Upgrade to kafka-python version 2.0.0
+628.bugfix
+Fix memory leak in kafka consumer when consumer is in idle state not consuming any message
 
 584.bugfix
 Handle `RequestTimedOutError` in `coordinator._do_commit_offsets()` method to explicitly mark coordinator as dead.
@@ -17,7 +20,6 @@ Upgrade to kafka-python version 1.4.7, which fixes a number of issues with clien
 523.feature
 ^^^^^^^^^^^
 
-<<<<<<< HEAD
 Add `consumer.last_poll_timestamp(partition)` which gives the ms timestamp of the last update of `highwater` and `lso`.
 =======
 571.feature
