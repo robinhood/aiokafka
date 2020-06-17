@@ -7,6 +7,9 @@ CHANGES
 Upgrade to kafka-python version 2.0.0
 628.bugfix
 Fix memory leak in kafka consumer when consumer is in idle state not consuming any message
+=======
+618.feature
+added `OAUTHBEARER` as a new `sasl_mechanism`.
 
 584.bugfix
 Handle `RequestTimedOutError` in `coordinator._do_commit_offsets()` method to explicitly mark coordinator as dead.

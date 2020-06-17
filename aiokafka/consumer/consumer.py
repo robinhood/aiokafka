@@ -202,10 +202,14 @@ class AIOKafkaConsumer(object):
 
         sasl_mechanism (str): Authentication mechanism when security_protocol
             is configured for SASL_PLAINTEXT or SASL_SSL. Valid values are:
-            PLAIN, GSSAPI, SCRAM-SHA-256, SCRAM-SHA-512. Default: PLAIN
+            PLAIN, GSSAPI, SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER.
+            Default: PLAIN
         sasl_plain_username (str): username for sasl PLAIN authentication.
             Default: None
         sasl_plain_password (str): password for sasl PLAIN authentication.
+            Default: None
+        sasl_oauth_token_provider (kafka.oauth.abstract.AbstractTokenProvider):
+            OAuthBearer token provider instance. (See kafka.oauth.abstract).
             Default: None
 
     Note:
@@ -252,6 +256,7 @@ class AIOKafkaConsumer(object):
                  sasl_plain_username=None,
                  sasl_kerberos_service_name='kafka',
                  sasl_kerberos_domain_name=None,
+                 sasl_oauth_token_provider=None,
                  traced_from_parent_span=None,
                  start_rebalancing_span=None,
                  start_coordinator_span=None,
@@ -279,7 +284,8 @@ class AIOKafkaConsumer(object):
             sasl_plain_username=sasl_plain_username,
             sasl_plain_password=sasl_plain_password,
             sasl_kerberos_service_name=sasl_kerberos_service_name,
-            sasl_kerberos_domain_name=sasl_kerberos_domain_name)
+            sasl_kerberos_domain_name=sasl_kerberos_domain_name,
+            sasl_oauth_token_provider=sasl_oauth_token_provider)
 
         self._group_id = group_id
         self._group_instance_id = group_instance_id
