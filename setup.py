@@ -29,12 +29,6 @@ try:
     USE_CYTHON = True
 except ImportError:
     USE_CYTHON = False
-else:
-    try:
-        from Cython.Build import cythonize
-        USE_CYTHON = True
-    except ImportError:
-        USE_CYTHON = False
 
 ext = ".pyx" if USE_CYTHON else ".c"
 
@@ -153,11 +147,12 @@ classifiers = [
 
 
 args = dict(
-    name='robinhood-aiokafka',
+    name="robinhood-aiokafka",
     version=read_version(),
-    description=('Kafka integration with asyncio.'),
-    long_description=('This is a temporary fork of aiokafka '
-                      'maintained by Robinhood'),
+    description=("Kafka integration with asyncio."),
+    long_description=(
+        "This is a temporary fork of aiokafka " "maintained by Robinhood"
+    ),
     classifiers=classifiers,
     platforms=["POSIX"],
     author="Andrew Svetlov",

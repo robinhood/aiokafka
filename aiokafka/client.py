@@ -83,7 +83,6 @@ class AIOKafkaClient:
 
     _closed = False
 
-    def __init__(self, *, loop, bootstrap_servers='localhost',
     def __init__(self, *, loop=None, bootstrap_servers='localhost',
                  client_id='aiokafka-' + __version__,
                  metadata_max_age_ms=300000,
@@ -425,10 +424,10 @@ class AIOKafkaClient:
                 # possible to get a leader that is for some reason not in
                 # metadata.
                 # I think requerying metadata should solve this problem
-                if broker is None :
+                if broker is None:
                     raise StaleMetadata(
                         'Broker id %s not in current metadata' % node_id)
-                
+
             log.debug("Initiating connection to node %s at %s:%s",
                       node_id, broker.host, broker.port)
 

@@ -533,8 +533,7 @@ class GroupCoordinator(BaseCoordinator):
         # Callback can rely on something like ``Consumer.position()`` that
         # requires committed point to be refreshed.
         await T(self._stop_commit_offsets_refresh_task)()
-        self.start_commit_offsets_refresh_task(
-            self._subscription.subscription.assignment)
+        self.start_commit_offsets_refresh_task(subscription.assignment)
 
         assigned = set(self._subscription.assigned_partitions())
         log.info("Setting newly assigned partitions %s for group %s",
@@ -600,8 +599,8 @@ class GroupCoordinator(BaseCoordinator):
         if trace_span is not None:
             T = self.traced_from_parent_span(lazy=True)
         else:
-            T = lambda f: f
-
+            def T(f):
+                return f
         try:
             await T(self._coordinator_lookup_lock.acquire)()
             retry_backoff = self._retry_backoff_ms / 1000
@@ -648,7 +647,7 @@ class GroupCoordinator(BaseCoordinator):
                 self.coordinator_id = coordinator_id
                 self._coordinator_dead_fut = create_future(loop=self._loop)
                 log.info("Discovered coordinator %s for group %s",
-                    self.coordinator_id, self.group_id)
+                         self.coordinator_id, self.group_id)
         finally:
             set_tag("coord_lookup_retry_count", i)
             T(self._coordinator_lookup_lock.release)()
@@ -687,7 +686,7 @@ class GroupCoordinator(BaseCoordinator):
                 if subscription is None:
                     await asyncio.wait(
                         [self._subscription.wait_for_subscription(),
-                        self._closing],
+                         self._closing],
                         return_when=asyncio.FIRST_COMPLETED, loop=self._loop)
                     if self._closing.done():
                         break
@@ -835,7 +834,7 @@ class GroupCoordinator(BaseCoordinator):
             self._start_heartbeat_task()
             return subscription.assignment
         return None
-    
+
     def _start_heartbeat_task(self):
         if self._heartbeat_task is None:
             self._heartbeat_task = ensure_future(

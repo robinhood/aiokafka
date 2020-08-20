@@ -258,7 +258,7 @@ class AIOKafkaConsumer(object):
                  start_rebalancing_span=None,
                  start_coordinator_span=None,
                  on_generation_id_known=None,
-                 flush_spans=None):
+                 flush_spans=None,
                  sasl_oauth_token_provider=None):
         if loop is None:
             loop = get_running_loop()
@@ -401,8 +401,7 @@ class AIOKafkaConsumer(object):
                 start_rebalancing_span=self._start_rebalancing_span,
                 start_coordinator_span=self._start_coordinator_span,
                 on_generation_id_known=self._on_generation_id_known,
-                flush_spans=self._flush_spans,
-                max_poll_interval_ms=self._max_poll_interval_ms
+                flush_spans=self._flush_spans
             )
             if self._subscription.subscription is not None:
                 if self._subscription.partitions_auto_assigned():
@@ -1282,6 +1281,7 @@ class AIOKafkaConsumer(object):
     @property
     def records_last_response(self):
         return self._fetcher.records_last_response
+
     async def __aenter__(self):
         await self.start()
         return self

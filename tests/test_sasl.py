@@ -12,7 +12,6 @@ from aiokafka.errors import (
     TransactionalIdAuthorizationFailed, UnknownTopicOrPartitionError
 )
 from aiokafka.structs import TopicPartition
-import pytest
 
 
 @pytest.mark.usefixtures('setup_test_class')

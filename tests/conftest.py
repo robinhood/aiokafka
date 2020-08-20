@@ -90,22 +90,6 @@ else:
         return
 
 
-if sys.platform != 'win32':
-
-    @pytest.fixture(scope='class')
-    def kerberos_utils(kafka_server):
-        from ._testutil import KerberosUtils
-        utils = KerberosUtils(kafka_server[-1])
-        utils.create_keytab()
-        return utils
-else:
-
-    @pytest.fixture()
-    def kerberos_utils():
-        pytest.skip("Only unit tests on windows for now =(")
-        return
-
-
 @pytest.fixture(scope='session')
 def ssl_folder(docker_ip_address):
     ssl_dir = pathlib.Path('tests/ssl_cert')

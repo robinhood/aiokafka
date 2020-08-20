@@ -712,7 +712,7 @@ class Fetcher:
                     tp_state.lso = lso
                     tp_state.timestamp = now_ms
                     if not tp_state.has_valid_position or \
-                            tp_state.position != fetch_offset :
+                            tp_state.position != fetch_offset:
                         log.debug(
                             "Discarding fetch response for partition %s "
                             "since its offset %s does not match the current "

@@ -16,6 +16,8 @@ __robinhood__ = True
 
 __all__ = [
     # Clients API
+    'BaseProducer',
+    'MultiTXNProducer',
     "AIOKafkaProducer",
     "AIOKafkaConsumer",
     # ABC's
