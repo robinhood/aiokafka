@@ -32,13 +32,12 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
     @run_until_complete
     async def test_producer_start(self):
         with self.assertRaises(ValueError):
-            producer = AIOKafkaProducer(loop=self.loop, acks=122)
+            producer = AIOKafkaProducer(acks=122)
 
         with self.assertRaises(ValueError):
-            producer = AIOKafkaProducer(loop=self.loop, api_version="3.4.5")
+            producer = AIOKafkaProducer(api_version="3.4.5")
 
-        producer = AIOKafkaProducer(
-            loop=self.loop, bootstrap_servers=self.hosts)
+        producer = AIOKafkaProducer(bootstrap_servers=self.hosts)
         await producer.start()
         self.assertNotEqual(producer.client.api_version, 'auto')
         partitions = await producer.partitions_for('some_topic_name')
@@ -135,6 +134,25 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
             await producer.send(self.topic, b'value', key=b'KEY')
 
     @run_until_complete
+    async def test_producer_context_manager(self):
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        async with producer:
+            assert producer._sender._sender_task is not None
+            await producer.send(self.topic, b'value', key=b'KEY')
+        assert producer._closed
+
+        # Closes even on error
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        with pytest.raises(ValueError):
+            async with producer:
+                assert producer._sender._sender_task is not None
+                await producer.send(self.topic, b'value', key=b'KEY')
+                raise ValueError()
+        assert producer._closed
+
+    @run_until_complete
     async def test_producer_send_noack(self):
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts, acks=0)
@@ -182,7 +200,7 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
             await producer.send(self.topic, value, key=key)
 
         await producer.stop()
-        await producer.stop()  # shold be Ok
+        await producer.stop()  # should be Ok
 
     @run_until_complete
     async def test_producer_send_with_compression(self):
@@ -550,7 +568,7 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
     @kafka_versions('>=0.11.0')
     @run_until_complete
     async def test_producer_indempotence_no_duplicates(self):
-        # Indempotent producer should retry produce in case of timeout error
+        # Idempotent producer should retry produce in case of timeout error
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts,
             enable_idempotence=True,
@@ -685,7 +703,7 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
     @run_until_complete
     async def test_producer_sender_errors_propagate_to_producer(self):
         # Following on #362 there may be other unexpected errors in sender
-        # routine that we wan't the user to see, rather than just get stuck.
+        # routine that we want the user to see, rather than just get stuck.
 
         producer = AIOKafkaProducer(
             loop=self.loop, bootstrap_servers=self.hosts, linger_ms=1000)
@@ -730,3 +748,15 @@ class TestKafkaProducerIntegration(KafkaIntegrationTestCase):
             await producer.send(
                 self.topic, b'msg', partition=0,
                 headers=[("type", b"Normal")])
+
+    @kafka_versions('>=0.11.0')
+    @run_until_complete
+    async def test_producer_send_and_wait_with_headers(self):
+        producer = AIOKafkaProducer(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        await producer.start()
+        self.add_cleanup(producer.stop)
+
+        resp = await producer.send_and_wait(
+            self.topic, b'msg', partition=0, headers=[("type", b"Normal")])
+        self.assertEqual(resp.partition, 0)

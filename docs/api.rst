@@ -77,7 +77,7 @@ GSSAPI sasl methods. Be sure to install ``gssapi`` python module to use GSSAPI.
 Please consult the `official documentation <http://kafka.apache.org/documentation.html#security_sasl>`_
 for setup instructions on Broker side. Client configuration is pretty much the
 same as JAVA's, consult the ``sasl_*`` options in Consumer and Producer API
-Referense for more details.
+Reference for more details.
 
 
 Error handling
@@ -96,7 +96,7 @@ Exception handling example:
         try:
             send_future = await producer.send('foobar', b'test data')
             response = await send_future  #  wait until message is produced
-        except KafkaTimeourError:
+        except KafkaTimeoutError:
             print("produce timeout... maybe we want to resend data again?")
         except KafkaError as err:
             print("some kafka error on produce: {}".format(err))

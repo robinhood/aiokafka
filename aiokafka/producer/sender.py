@@ -52,7 +52,7 @@ class Sender:
         self._on_irrecoverable_error = on_irrecoverable_error
 
     async def start(self):
-        # If producer is indempotent we need to assure we have PID found
+        # If producer is idempotent we need to assure we have PID found
         await self._maybe_wait_for_pid()
         self._sender_task = ensure_future(
             self._sender_routine(), loop=self._loop)
@@ -91,9 +91,7 @@ class Sender:
             while True:
                 # If indempotence or transactions are turned on we need to
                 # have a valid PID to send any request below
-                log.debug('+maybe wait for pid')
                 await self._maybe_wait_for_pid()
-                log.debug('-maybe wait for pid')
 
                 waiters = set()
                 # As transaction coordination is done via a single, separate
@@ -148,15 +146,10 @@ class Sender:
                 # * At least one of produce task is finished
                 # * Data for new partition arrived
                 # * Metadata update if partition leader unknown
-                log.debug('+SENDER WAIT FOR %r' % (waiters,))
-                if waiters:
-                    done, _ = await asyncio.wait(
-                        waiters,
-                        return_when=asyncio.FIRST_COMPLETED,
-                        loop=self._loop)
-                    log.debug('-SENDER WAIT FOR')
-                else:
-                    await asyncio.sleep(0.5)
+                done, _ = await asyncio.wait(
+                    waiters,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    loop=self._loop)
 
                 # done tasks should never produce errors, if they are it's a
                 # bug

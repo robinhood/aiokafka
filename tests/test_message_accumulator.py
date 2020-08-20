@@ -4,9 +4,10 @@ import unittest
 from unittest import mock
 
 from kafka.cluster import ClusterMetadata
-from kafka.common import (TopicPartition, KafkaTimeoutError,
+from kafka.errors import (KafkaTimeoutError,
                           NotLeaderForPartitionError,
                           LeaderNotAvailableError)
+from kafka.structs import TopicPartition
 from ._testutil import run_until_complete
 from aiokafka.util import ensure_future
 from aiokafka.producer.message_accumulator import (
@@ -90,7 +91,7 @@ class TestMessageAccumulator(unittest.TestCase):
 
         done, _ = await asyncio.wait(
             [add_task], timeout=0.1, loop=self.loop)
-        self.assertFalse(bool(done))  # we stil not drained data for tp1
+        self.assertFalse(bool(done))  # we still not drained data for tp1
 
         batches, unknown_leaders_exist = ma.drain_by_nodes(ignore_nodes=[])
         self.assertEqual(unknown_leaders_exist, True)
@@ -132,9 +133,9 @@ class TestMessageAccumulator(unittest.TestCase):
             tp2, None, b'msg for tp@2', timeout=2)
         fut2 = await ma.add_message(
             tp3, None, b'msg for tp@3', timeout=2)
-        await ma.add_message(tp1, None, b'0123456789'*70, timeout=2)
+        await ma.add_message(tp1, None, b'0123456789' * 70, timeout=2)
         with self.assertRaises(KafkaTimeoutError):
-            await ma.add_message(tp1, None, b'0123456789'*70, timeout=2)
+            await ma.add_message(tp1, None, b'0123456789' * 70, timeout=2)
         batches, _ = ma.drain_by_nodes(ignore_nodes=[])
         self.assertEqual(batches[1][tp1].expired(), True)
         with self.assertRaises(LeaderNotAvailableError):
@@ -147,7 +148,7 @@ class TestMessageAccumulator(unittest.TestCase):
         fut02 = await ma.add_message(
             tp0, b'key1', b'value#1', timeout=2)
         fut10 = await ma.add_message(
-            tp1, None, b'0123456789'*70, timeout=2)
+            tp1, None, b'0123456789' * 70, timeout=2)
         batches, _ = ma.drain_by_nodes(ignore_nodes=[])
         self.assertEqual(batches[0][tp0].expired(), False)
         self.assertEqual(batches[1][tp1].expired(), False)

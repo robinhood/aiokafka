@@ -36,7 +36,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         auto_offset_reset = kwargs.pop('auto_offset_reset', 'earliest')
         group = kwargs.pop('group', 'group-%s' % self.id())
         consumer = AIOKafkaConsumer(
-            self.topic, loop=self.loop, group_id=group,
+            self.topic, group_id=group,
             bootstrap_servers=self.hosts,
             enable_auto_commit=enable_auto_commit,
             auto_offset_reset=auto_offset_reset,
@@ -115,6 +115,46 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
 
         # will ignore, no exception expected
         await consumer.stop()
+
+    @run_until_complete
+    async def test_consumer_context_manager(self):
+        await self.send_messages(0, list(range(0, 10)))
+
+        group = 'group-%s' % self.id()
+        consumer = AIOKafkaConsumer(
+            self.topic, group_id=group,
+            bootstrap_servers=self.hosts,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest")
+        async with consumer as con:
+            assert con is consumer
+            assert consumer._fetcher is not None
+            messages = []
+            async for m in consumer:
+                messages.append(m)
+                if len(messages) == 10:
+                    break
+            self.assert_message_count(messages, 10)
+        assert consumer._closed
+
+        # Finilize on exception too
+        consumer = AIOKafkaConsumer(
+            self.topic, group_id=group,
+            bootstrap_servers=self.hosts,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest")
+        with pytest.raises(ValueError):
+            async with consumer as con:
+                assert con is consumer
+                assert consumer._fetcher is not None
+                messages = []
+                async for m in consumer:
+                    messages.append(m)
+                    if len(messages) == 10:
+                        break
+                self.assert_message_count(messages, 10)
+                raise ValueError
+        assert consumer._closed
 
     @run_until_complete
     async def test_consumer_api_version(self):
@@ -954,7 +994,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
                         {my_topic, my_topic2})
         self.assertEqual(consumer.subscription(), {my_topic, my_topic2})
 
-        # Now lets actualy produce some data and verify that it is consumed
+        # Now lets actually produce some data and verify that it is consumed
         await producer.send(my_topic, b'test msg')
         data = await asyncio.wait_for(
             consume_task, timeout=2, loop=self.loop)
@@ -1000,7 +1040,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
                         {my_topic, my_topic2})
         self.assertEqual(consumer.subscription(), {my_topic, my_topic2})
 
-        # Now lets actualy produce some data and verify that it is consumed
+        # Now lets actually produce some data and verify that it is consumed
         await producer.send(my_topic, b'test msg')
         data = await asyncio.wait_for(
             consume_task, timeout=2, loop=self.loop)
@@ -1076,7 +1116,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
     @run_until_complete
     async def test_consumer_stops_getone(self):
         # If we have a fetch in progress it should be cancelled if consumer is
-        # stoped
+        # stopped
         consumer = await self.consumer_factory()
         task = self.loop.create_task(consumer.getone())
         await asyncio.sleep(0.1, loop=self.loop)
@@ -1094,7 +1134,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
     @run_until_complete
     async def test_consumer_stops_getmany(self):
         # If we have a fetch in progress it should be cancelled if consumer is
-        # stoped
+        # stopped
         consumer = await self.consumer_factory()
         task = self.loop.create_task(consumer.getmany(timeout_ms=10000))
         await asyncio.sleep(0.1, loop=self.loop)
@@ -1931,6 +1971,7 @@ class TestConsumerIntegration(KafkaIntegrationTestCase):
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(get_task, timeout=0.5, loop=self.loop)
 
+    @run_until_complete
     async def test_max_poll_interval_ms(self):
         await self.send_messages(0, list(range(0, 10)))
         await self.send_messages(1, list(range(10, 20)))

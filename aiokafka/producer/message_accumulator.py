@@ -331,16 +331,15 @@ class MessageAccumulator:
                 batch = pending_batches[-1]
 
             future = batch.append(key, value, timestamp_ms, headers=headers)
-            if future is None:
-                # Batch is full, can't append data atm,
-                # waiting until batch per topic-partition is drained
-                start = self._loop.time()
-                await batch.wait_drain(timeout)
-                timeout -= self._loop.time() - start
-                if timeout <= 0:
-                    raise KafkaTimeoutError()
-            else:
+            if future is not None:
                 return future
+            # Batch is full, can't append data atm,
+            # waiting until batch per topic-partition is drained
+            start = self._loop.time()
+            await batch.wait_drain(timeout)
+            timeout -= self._loop.time() - start
+            if timeout <= 0:
+                raise KafkaTimeoutError()
 
     def data_waiter(self):
         """ Return waiter future that will be resolved when accumulator contain
@@ -379,7 +378,7 @@ class MessageAccumulator:
         batch.reset_drain()
 
     def drain_by_nodes(self, ignore_nodes, muted_partitions=set()):
-        """ Group batches by leader to partiton nodes. """
+        """ Group batches by leader to partition nodes. """
         nodes = collections.defaultdict(dict)
         unknown_leaders_exist = False
         for tp in list(self._batches.keys()):

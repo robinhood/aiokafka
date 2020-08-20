@@ -1,14 +1,63 @@
-CHANGES
--------
+=========
+Changelog
+=========
+
+628.bugfix
+Fix memory leak in kafka consumer when consumer is in idle state not consuming any message
+
+618.feature
+added `OAUTHBEARER` as a new `sasl_mechanism`.
 
 523.feature
 ^^^^^^^^^^^
 
 Add `consumer.last_poll_timestamp(partition)` which gives the ms timestamp of the last update of `highwater` and `lso`.
 
+0.6.0 (2020-05-15)
+==================
+
+New features:
+
+* Add async context manager support for both Producer and Consumer. (pr #613 and #494 by @nimish)
+* Upgrade to kafka-python version 2.0.0 and set it as non-strict
+  parameter. (issue #590 by @yumendy and #558 by @originalgremlin)
+* Make loop argument optional (issue #544)
+* SCRAM-SHA-256 and SCRAM-SHA-512 support for SASL authentication (issue #571 and pr #588 by @SukiCZ)
+* Added headers param to AIOKafkaProducer.send_and_wait (pr #553 by @megabotan)
+* Add `consumer.last_poll_timestamp(partition)` which gives the ms timestamp of the last
+  update of `highwater` and `lso`. (issue #523 and pr #526 by @aure-olli)
+* Change all code base to async-await (pr #522)
+* Minor: added PR and ISSUE templates to GitHub
+
+
+Bugfixes:
+
+* Ignore debug package generation on bdist_rpm command. (issue #599 by @gabriel-tincu)
+* UnknownMemberId was raised to the user instead of retrying on auto commit. (issue #611)
+* Fix issue with messages not being read after subscriptions change with group_id=None. (issue #536)
+* Handle `RequestTimedOutError` in `coordinator._do_commit_offsets()` method to explicitly mark
+  coordinator as dead. (issue #584 and pr #585 by @FedirAlifirenko)
+* Added handling `asyncio.TimeoutError` on metadata request to broker and metadata update.
+  (issue #576 and pr #577 by @MichalMazurek)
+* Too many reqs on kafka not available (issue #496 by @lud4ik)
+* Consumer.seek_to_committed now returns mapping of committed offsets (pr #531 by @ask)
+* Message Accumulator: add_message being recursive eventually overflows (pr #530 by @ask)
+
+
+Improved Documentation:
+
+* Clarify auto_offset_reset usage. (pr 601 by @dargor)
+* Fix spelling errors in comments and documentation using codespell (pr #567 by mauritsvdvijgh)
+* Delete old benchmark file (issue #546 by @jeffwidman)
+* Fix a few typos in docs (pr #573 and pr #563 by @ultrabug)
+* Fix typos, spelling, grammar, etc (pr #545 and pr #547 by @jeffwidman)
+* Fix typo in docs (pr #541 by @pablogamboa)
+* Fix documentation for benchmark (pr #537 by @abhishekray07)
+* Better logging for bad CRC (pr #529 by @ask)
+
 
 0.5.2 (2019-03-10)
-^^^^^^^^^^^^^^^^^^
+==================
 
 Bugfixes:
 
@@ -18,7 +67,7 @@ Bugfixes:
 
 
 0.5.1 (2019-03-10)
-^^^^^^^^^^^^^^^^^^
+==================
 
 New features:
 
@@ -39,14 +88,14 @@ Bugfixes:
 
 
 0.5.0 (2018-12-28)
-^^^^^^^^^^^^^^^^^^
+==================
 
 New features:
 
 * Add full support for V2 format messages with a Cython extension. Those are
   used for Kafka >= 0.11.0.0
 * Added support for transactional producing (issue #182)
-* Added support for indempotent producing with `enable_idempotence` parameter
+* Added support for idempotent producing with `enable_idempotence` parameter
 * Added support for `fetch_max_bytes` in AIOKafkaConsumer. This can help limit
   the amount of data transferred in a single roundtrip to broker, which is
   essential for consumers with large amount of partitions
@@ -63,7 +112,7 @@ Bugfixes:
 
 
 0.4.3 (2018-11-01)
-^^^^^^^^^^^^^^^^^^
+==================
 
 Bugfix:
 
@@ -72,7 +121,7 @@ Bugfix:
 
 
 0.4.2 (2018-09-12)
-^^^^^^^^^^^^^^^^^^
+==================
 
 Bugfix:
 
@@ -89,7 +138,7 @@ Infrastructure:
 * Refactored travis CI build pipeline
 
 0.4.1 (2018-05-13)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Fix issue when offset commit error reports wrong partition in log (issue #353)
 * Add ResourceWarning when Producer, Consumer or Connections are not closed
@@ -98,7 +147,7 @@ Infrastructure:
 
 
 0.4.0 (2018-01-30)
-^^^^^^^^^^^^^^^^^^
+==================
 
 Major changes:
 
@@ -108,7 +157,7 @@ Major changes:
   versions later
 * Added C extension for Records parsing protocol, boosting the speed of
   produce/consume routines significantly
-* Added an experimental batch producer API for unique cases, where user want's
+* Added an experimental batch producer API for unique cases, where user wants
   to control batching himself (by @shargan)
 
 
@@ -144,7 +193,7 @@ Big thanks to:
 
 
 0.3.1 (2017-09-19)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Added `AIOKafkaProducer.flush()` method. (PR #209 by @vineet-rh)
 * Fixed a bug with uvloop involving `float("inf")` for timeout. (PR #210 by
@@ -153,7 +202,7 @@ Big thanks to:
 
 
 0.3.0 (2017-08-17)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Moved all public structures and errors to `aiokafka` namespace. You will no
   longer need to import from `kafka` namespace.
@@ -169,7 +218,7 @@ Big thanks to:
   Producer interface.
 
 0.2.3 (2017-07-23)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Fixed retry problem in Producer, when buffer is not reset to 0 offset.
   Thanks to @ngavrysh for the fix in Tubular/aiokafka fork. (issue #184)
@@ -180,7 +229,7 @@ Big thanks to:
 
 
 0.2.2 (2017-04-17)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Reconnect after KafkaTimeoutException. (PR #149 by @Artimi)
 * Fixed compacted topic handling. It could skip messages if those were
@@ -197,7 +246,7 @@ Big thanks to @Artimi for pointing out several of those issues.
 
 
 0.2.1 (2017-02-19)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Add a check to wait topic autocreation in Consumer, instead of raising
   UnknownTopicOrPartitionError (PR #92 by fabregas)
@@ -211,7 +260,7 @@ Big thanks to @Artimi for pointing out several of those issues.
 
 
 0.2.0 (2016-12-18)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Added SSL support. (PR #81 by Drizzt1991)
 * Fixed UnknownTopicOrPartitionError error on first message for autocreated topic (PR #96 by fabregas)
@@ -224,7 +273,7 @@ Big thanks to @Artimi for pointing out several of those issues.
 
 
 0.1.4 (2016-11-07)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Bumped kafka-python version to 1.3.1 and Kafka to 0.10.1.0.
 * Fixed auto version detection, to correctly handle 0.10.0.0 version
@@ -237,7 +286,7 @@ Big thanks to @fabregas for the hard work on this release (PR #60)
 
 
 0.1.3 (2016-10-18)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Fixed bug with infinite loop on heartbeats with autocommit=True. #44
 * Bumped kafka-python to version 1.1.1
@@ -246,7 +295,7 @@ Big thanks to @fabregas for the hard work on this release (PR #60)
 
 
 0.1.2 (2016-04-30)
-^^^^^^^^^^^^^^^^^^
+==================
 
 * Added Python3.5 usage example to docs
 * Don't raise retriable exceptions in 3.5's async for iterator
@@ -254,12 +303,12 @@ Big thanks to @fabregas for the hard work on this release (PR #60)
 
 
 0.1.1 (2016-04-15)
-^^^^^^^^^^^^^^^^^^
+==================
 
-* Fix packaging issues. Removed unneded files from package.
+* Fix packaging issues. Removed unneeded files from package.
 
 0.1.0 (2016-04-15)
-^^^^^^^^^^^^^^^^^^
+==================
 
 Initial release
 

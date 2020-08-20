@@ -12,7 +12,7 @@ from kafka.protocol.commit import (
     OffsetCommitRequest, OffsetCommitResponse_v2,
     OffsetFetchRequest_v1 as OffsetFetchRequest
 )
-import kafka.common as Errors
+import kafka.errors as Errors
 
 from ._testutil import KafkaIntegrationTestCase, run_until_complete
 
@@ -20,7 +20,7 @@ from aiokafka import ConsumerRebalanceListener
 from aiokafka.client import AIOKafkaClient
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiokafka.consumer.group_coordinator import (
-    GroupCoordinator, CoordinatorGroupRebalance)
+    GroupCoordinator, CoordinatorGroupRebalance, NoGroupCoordinator)
 from aiokafka.consumer.subscription_state import SubscriptionState
 from aiokafka.util import create_future, ensure_future
 
@@ -138,7 +138,7 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
         _on_join_leader_mock.side_effect = asyncio.coroutine(
             lambda resp: b"123")
 
-       async def do_rebalance():
+        async def do_rebalance():
             rebalance = CoordinatorGroupRebalance(
                 coordinator, coordinator.group_id, coordinator.coordinator_id,
                 subscription.subscription, coordinator._assignors,
@@ -183,7 +183,7 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
             await do_rebalance()
         self.assertEqual(coordinator.need_rejoin(subsc), True)
 
-        # no exception expected, member_id should be reseted
+        # no exception expected, member_id should be reset
         coordinator.member_id = 'some_invalid_member_id'
         error_type = Errors.UnknownMemberIdError
         resp = await do_rebalance()
@@ -196,7 +196,7 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
         with self.assertRaises(Errors.KafkaError):  # Masked as unknown error
             await do_rebalance()
 
-        # no exception expected, coordinator_id should be reseted
+        # no exception expected, coordinator_id should be reset
         error_type = Errors.GroupCoordinatorNotAvailableError
         resp = await do_rebalance()
         self.assertIsNone(resp)
@@ -215,7 +215,7 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
         self.assertEqual(_on_join_leader_mock.call_count, 2)
 
         # Subscription changes before rebalance finishes
-        def send_change_sub(*args, **kw):
+        async def send_change_sub(*args, **kw):
             subscription.subscribe(topics=set(['topic2']))
             return (await send(*args, **kw))
         mocked.send.side_effect = send_change_sub
@@ -390,7 +390,7 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
             with self.assertRaises(Errors.OffsetMetadataTooLargeError):
                 await coordinator.commit_offsets(assignment, offsets)
 
-            # retriable erros should be retried
+            # retriable errors should be retried
             commit_error = [
                 Errors.GroupLoadInProgressError,
                 Errors.GroupLoadInProgressError,
@@ -432,12 +432,26 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
                 Errors.NoError
             ]
             await coordinator.commit_offsets(assignment, offsets)
+            commit_error = [
+                Errors.RequestTimedOutError,
+                Errors.NoError
+            ]
+            await coordinator.commit_offsets(assignment, offsets)
 
             # Make sure coordinator_id is reset properly each retry
-            commit_error = Errors.GroupCoordinatorNotAvailableError
-            with self.assertRaises(Errors.GroupCoordinatorNotAvailableError):
-                await coordinator._do_commit_offsets(assignment, offsets)
-            self.assertEqual(coordinator.coordinator_id, None)
+            for retriable_error in (
+                    Errors.GroupCoordinatorNotAvailableError,
+                    Errors.NotCoordinatorForGroupError,
+                    Errors.RequestTimedOutError,
+            ):
+                self.assertIsNotNone(coordinator.coordinator_id)
+                commit_error = retriable_error
+                with self.assertRaises(retriable_error):
+                    await coordinator._do_commit_offsets(assignment, offsets)
+                self.assertIsNone(coordinator.coordinator_id)
+
+                # ask coordinator to refresh coordinator_id value
+                await coordinator.ensure_coordinator_known()
 
             # Unknown errors are just propagated too
             commit_error = Errors.UnknownError
@@ -1173,6 +1187,13 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
             coordinator._next_autocommit_deadline, now + timeout,
             places=1)
 
+        # UnknownMemberId should also retry
+        coordinator._next_autocommit_deadline = 0
+        mocked.side_effect = Errors.UnknownMemberIdError()
+        now = self.loop.time()
+        timeout = await coordinator._maybe_do_autocommit(assignment)
+        self.assertEqual(timeout, 0.05)
+
         # Not retriable errors should skip autocommit and log
         mocked.side_effect = Errors.UnknownError()
         now = self.loop.time()
@@ -1329,3 +1350,38 @@ class TestKafkaCoordinatorIntegration(KafkaIntegrationTestCase):
         self.assertEqual(autocommit_mock.call_count, 4)
         self.assertEqual(metadata_mock.call_count, 1)
         self.assertEqual(last_commit_mock.call_count, 1)
+
+    @run_until_complete
+    async def test_no_group_subscribe_during_metadata_update(self):
+        # Issue #536. During metadata update we can't assume the subscription
+        # did not change. We should handle the case by refreshing meta again.
+        client = AIOKafkaClient(
+            loop=self.loop, bootstrap_servers=self.hosts)
+        await client.bootstrap()
+        await self.wait_topic(client, 'topic1')
+        await self.wait_topic(client, 'topic2')
+        await client.set_topics(('other_topic', ))
+
+        subscription = SubscriptionState(loop=self.loop)
+        coordinator = NoGroupCoordinator(
+            client, subscription, loop=self.loop)
+        subscription.subscribe(topics=set(['topic1']))
+        client.set_topics(('topic1', ))
+        await asyncio.sleep(0.0001, loop=self.loop)
+
+        # Change subscription before metadata update is received
+        subscription.subscribe(topics=set(['topic2']))
+        metadata_fut = client.set_topics(('topic2', ))
+
+        try:
+            await asyncio.wait_for(
+                metadata_fut,
+                timeout=0.2
+            )
+        except asyncio.TimeoutError:
+            pass
+
+        self.assertFalse(client._sync_task.done())
+
+        await coordinator.close()
+        await client.close()
