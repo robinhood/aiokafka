@@ -17,8 +17,8 @@ from kafka.protocol.admin import (
 
 from aiokafka.conn import AIOKafkaConnection, create_conn, VersionInfo
 from aiokafka.errors import (
-    ConnectionError, CorrelationIdError, KafkaError, NoError, UnknownError,
-    UnsupportedSaslMechanismError, IllegalSaslStateError
+    KafkaConnectionError, CorrelationIdError, KafkaError, NoError,
+    UnknownError, UnsupportedSaslMechanismError, IllegalSaslStateError
 )
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from ._testutil import KafkaIntegrationTestCase, run_until_complete
@@ -88,14 +88,13 @@ class ConnIntegrationTest(KafkaIntegrationTestCase):
         request = MetadataRequest([])
         await conn.send(request)
         await asyncio.sleep(0.15, loop=self.loop)
-        # Check if we're stil connected after 250ms, as we were not idle
+        # Check if we're still connected after 250ms, as we were not idle
         self.assertEqual(conn.connected(), True)
 
         # It shouldn't break if we have a long running call either
         readexactly = conn._reader.readexactly
         with mock.patch.object(conn._reader, 'readexactly') as mocked:
-            @asyncio.coroutine
-            def long_read(n):
+            async def long_read(n):
                 await asyncio.sleep(0.2, loop=self.loop)
                 return (await readexactly(n))
             mocked.side_effect = long_read
@@ -137,13 +136,13 @@ class ConnIntegrationTest(KafkaIntegrationTestCase):
         host, port = self.kafka_host, self.kafka_port
         conn = AIOKafkaConnection(host=host, port=port, loop=self.loop)
         request = MetadataRequest([])
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(KafkaConnectionError):
             await conn.send(request)
 
         conn._writer = mock.MagicMock()
         conn._writer.write.side_effect = OSError('mocked writer is closed')
 
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(KafkaConnectionError):
             await conn.send(request)
 
     @run_until_complete
@@ -230,7 +229,7 @@ class ConnIntegrationTest(KafkaIntegrationTestCase):
         # invoke reader task
         conn._read_task = conn._create_reader_task()
 
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(KafkaConnectionError):
             await conn.send(request)
         self.assertEqual(conn.connected(), False)
 
@@ -410,14 +409,14 @@ class ConnIntegrationTest(KafkaIntegrationTestCase):
 
         # Broken pipe error
         conn._writer.write.side_effect = OSError
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(KafkaConnectionError):
             conn._send_sasl_token(b"Super data")
         self.assertEqual(out_buffer, [])
         self.assertEqual(len(conn._requests), 0)
         self.assertEqual(conn.close.call_count, 1)
 
         conn._writer = None
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(KafkaConnectionError):
             conn._send_sasl_token(b"Super data")
         # We don't need to close 2ce
         self.assertEqual(conn.close.call_count, 1)

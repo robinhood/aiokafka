@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import docker as libdocker
+import logging
 import pytest
 import socket
 import uuid
@@ -14,6 +15,8 @@ from aiokafka.record.legacy_records import (
 from aiokafka.record.default_records import (
     DefaultRecordBatchBuilder, _DefaultRecordBatchBuilderPy)
 from aiokafka.util import NO_EXTENSIONS
+from ._testutil import wait_kafka
+
 
 if not NO_EXTENSIONS:
     assert LegacyRecordBatchBuilder is not _LegacyRecordBatchBuilderPy and \
@@ -35,6 +38,14 @@ def pytest_addoption(parser):
                      help='Do not pull new docker image before test run')
 
 
+def pytest_configure(config):
+    """Disable the loggers."""
+    # Debug logs clobber output on CI
+    for name in ["urllib3", "asyncio"]:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.INFO)
+
+
 @pytest.fixture(scope='session')
 def docker(request):
     image = request.config.getoption('--docker-image')
@@ -53,12 +64,14 @@ def acl_manager(kafka_server, request):
     return manager
 
 
-@pytest.yield_fixture(autouse=True)
-def clean_acl(acl_manager):
-    # This is used to have a better report on ResourceWarnings. Without it
-    # all warnings will be filled in the end of last test-case.
-    yield
-    acl_manager.cleanup()
+@pytest.fixture(scope='class')
+def kafka_config(kafka_server, request):
+    image = request.config.getoption('--docker-image')
+    tag = image.split(":")[-1].replace('_', '-')
+
+    from ._testutil import KafkaConfig
+    manager = KafkaConfig(kafka_server[-1], tag)
+    return manager
 
 
 if sys.platform != 'win32':
@@ -151,9 +164,15 @@ if sys.platform != 'win32':
             'NUM_PARTITIONS': 2
         }
         kafka_version = image.split(":")[-1].split("_")[-1]
-        if not kafka_version == "0.9.0.1":
-            environment['SASL_MECHANISMS'] = "PLAIN,GSSAPI"
+        kafka_version = tuple(int(x) for x in kafka_version.split('.'))
+        if kafka_version >= (0, 10, 2):
+            environment['SASL_MECHANISMS'] = (
+                "PLAIN,GSSAPI,SCRAM-SHA-256,SCRAM-SHA-512"
+            )
             environment['SASL_JAAS_FILE'] = "kafka_server_jaas.conf"
+        elif kafka_version >= (0, 10, 1):
+            environment['SASL_MECHANISMS'] = "PLAIN,GSSAPI"
+            environment['SASL_JAAS_FILE'] = "kafka_server_jaas_no_scram.conf"
         else:
             environment['SASL_MECHANISMS'] = "GSSAPI"
             environment['SASL_JAAS_FILE'] = "kafka_server_gssapi_jaas.conf"
@@ -177,13 +196,27 @@ if sys.platform != 'win32':
             },
             environment=environment,
             tty=True,
-            detach=True)
+            detach=True,
+            remove=True)
 
-        yield (
-            kafka_host, kafka_port, kafka_ssl_port, kafka_sasl_plain_port,
-            kafka_sasl_ssl_port, container
-        )
-        container.remove(force=True)
+        try:
+            if not wait_kafka(kafka_host, kafka_port):
+                exit_code, output = container.exec_run(
+                    ["supervisorctl", "tail", "kafka"])
+                print("Kafka failed to start. \n--- STDOUT:")
+                print(output.decode(), file=sys.stdout)
+                exit_code, output = container.exec_run(
+                    ["supervisorctl", "tail", "kafka", "stderr"])
+                print("--- STDERR:")
+                print(output.decode(), file=sys.stderr)
+                pytest.exit("Could not start Kafka Server")
+
+            yield (
+                kafka_host, kafka_port, kafka_ssl_port, kafka_sasl_plain_port,
+                kafka_sasl_ssl_port, container
+            )
+        finally:
+            container.remove(force=True)
 
 else:
 
@@ -224,7 +257,7 @@ def setup_test_class_serverless(request, loop, ssl_folder):
 
 @pytest.fixture(scope='class')
 def setup_test_class(request, loop, kafka_server, ssl_folder, acl_manager,
-                     kerberos_utils):
+                     kerberos_utils, kafka_config):
     request.cls.loop = loop
     request.cls.kafka_host = kafka_server[0]
     request.cls.kafka_port = kafka_server[1]
@@ -234,13 +267,14 @@ def setup_test_class(request, loop, kafka_server, ssl_folder, acl_manager,
     request.cls.ssl_folder = ssl_folder
     request.cls.acl_manager = acl_manager
     request.cls.kerberos_utils = kerberos_utils
+    request.cls.kafka_config = kafka_config
+    request.cls.hosts = [
+        '{}:{}'.format(request.cls.kafka_host, request.cls.kafka_port)
+    ]
 
     docker_image = request.config.getoption('--docker-image')
     kafka_version = docker_image.split(":")[-1].split("_")[-1]
     request.cls.kafka_version = kafka_version
-
-    if hasattr(request.cls, 'wait_kafka'):
-        request.cls.wait_kafka()
 
 
 def pytest_ignore_collect(path, config):

@@ -15,13 +15,15 @@ from aiokafka.protocol.coordination import FindCoordinatorRequest
 from aiokafka.protocol.produce import ProduceRequest
 from aiokafka.errors import (
     KafkaError,
-    ConnectionError,
+    KafkaConnectionError,
     NodeNotReadyError,
     RequestTimedOutError,
     UnknownTopicOrPartitionError,
     UnrecognizedBrokerVersion,
     StaleMetadata)
-from aiokafka.util import ensure_future, create_future, parse_kafka_version
+from aiokafka.util import (
+    ensure_future, create_future, get_running_loop, parse_kafka_version
+)
 
 
 __all__ = ['AIOKafkaClient']
@@ -76,12 +78,12 @@ class AIOKafkaClient:
             Default: None.
         connections_max_idle_ms (int): Close idle connections after the number
             of milliseconds specified by this config. Specifying `None` will
-            disable idle checks. Default: 540000 (9hours).
+            disable idle checks. Default: 540000 (9 minutes).
     """
 
     _closed = False
 
-    def __init__(self, *, loop, bootstrap_servers='localhost',
+    def __init__(self, *, loop=None, bootstrap_servers='localhost',
                  client_id='aiokafka-' + __version__,
                  metadata_max_age_ms=300000,
                  request_timeout_ms=40000,
@@ -94,7 +96,12 @@ class AIOKafkaClient:
                  sasl_plain_username=None,
                  sasl_plain_password=None,
                  sasl_kerberos_service_name='kafka',
-                 sasl_kerberos_domain_name=None):
+                 sasl_kerberos_domain_name=None,
+                 sasl_oauth_token_provider=None
+                 ):
+        if loop is None:
+            loop = get_running_loop()
+
         if security_protocol not in (
                 'SSL', 'PLAINTEXT', 'SASL_PLAINTEXT', 'SASL_SSL'):
             raise ValueError("`security_protocol` should be SSL or PLAINTEXT")
@@ -102,10 +109,14 @@ class AIOKafkaClient:
             raise ValueError(
                 "`ssl_context` is mandatory if security_protocol=='SSL'")
         if security_protocol in ["SASL_SSL", "SASL_PLAINTEXT"]:
-            if sasl_mechanism not in ("PLAIN", "GSSAPI"):
+            if sasl_mechanism not in (
+                    "PLAIN", "GSSAPI", "SCRAM-SHA-256", "SCRAM-SHA-512",
+                    "OAUTHBEARER"):
                 raise ValueError(
-                    "only `PLAIN` and `GSSAPI` sasl_mechanism "
-                    "are supported at the moment")
+                    "only `PLAIN`, `GSSAPI`, `SCRAM-SHA-256`, "
+                    "`SCRAM-SHA-512` and `OAUTHBEARER`"
+                    "sasl_mechanism are supported "
+                    "at the moment")
             if sasl_mechanism == "PLAIN" and \
                (sasl_plain_username is None or sasl_plain_password is None):
                 raise ValueError(
@@ -128,6 +139,7 @@ class AIOKafkaClient:
         self._sasl_plain_password = sasl_plain_password
         self._sasl_kerberos_service_name = sasl_kerberos_service_name
         self._sasl_kerberos_domain_name = sasl_kerberos_domain_name
+        self._sasl_oauth_token_provider = sasl_oauth_token_provider
 
         self.cluster = ClusterMetadata(metadata_max_age_ms=metadata_max_age_ms)
 
@@ -200,6 +212,7 @@ class AIOKafkaClient:
                     sasl_plain_password=self._sasl_plain_password,
                     sasl_kerberos_service_name=self._sasl_kerberos_service_name,  # noqa: ignore=E501
                     sasl_kerberos_domain_name=self._sasl_kerberos_domain_name,
+                    sasl_oauth_token_provider=self._sasl_oauth_token_provider,
                     version_hint=version_hint)
             except (OSError, asyncio.TimeoutError) as err:
                 log.error('Unable connect to "%s:%s": %s', host, port, err)
@@ -207,7 +220,7 @@ class AIOKafkaClient:
 
             try:
                 metadata = await bootstrap_conn.send(metadata_request)
-            except KafkaError as err:
+            except (KafkaError, asyncio.TimeoutError) as err:
                 log.warning('Unable to request metadata from "%s:%s": %s',
                             host, port, err)
                 bootstrap_conn.close()
@@ -227,7 +240,7 @@ class AIOKafkaClient:
             log.debug('Received cluster metadata: %s', self.cluster)
             break
         else:
-            raise ConnectionError(
+            raise KafkaConnectionError(
                 'Unable to bootstrap from {}'.format(self.hosts))
 
         # detect api version if need
@@ -294,9 +307,9 @@ class AIOKafkaClient:
 
             try:
                 metadata = await conn.send(metadata_request)
-            except KafkaError as err:
+            except (KafkaError, asyncio.TimeoutError) as err:
                 log.error(
-                    'Unable to request metadata from node with id %s: %s',
+                    'Unable to request metadata from node with id %s: %r',
                     node_id, err)
                 continue
 
@@ -411,10 +424,10 @@ class AIOKafkaClient:
                 # possible to get a leader that is for some reason not in
                 # metadata.
                 # I think requerying metadata should solve this problem
-                if broker is None :
+                if broker is None:
                     raise StaleMetadata(
                         'Broker id %s not in current metadata' % node_id)
-                
+
             log.debug("Initiating connection to node %s at %s:%s",
                       node_id, broker.host, broker.port)
 
@@ -439,9 +452,10 @@ class AIOKafkaClient:
                     sasl_plain_password=self._sasl_plain_password,
                     sasl_kerberos_service_name=self._sasl_kerberos_service_name,  # noqa: ignore=E501
                     sasl_kerberos_domain_name=self._sasl_kerberos_domain_name,
+                    sasl_oauth_token_provider=self._sasl_oauth_token_provider,
                     version_hint=version_hint
                 )
-        except (OSError, asyncio.TimeoutError) as err:
+        except (OSError, asyncio.TimeoutError, KafkaError) as err:
             log.error('Unable connect to node with id %s: %s', node_id, err)
             if group == ConnectionGroup.DEFAULT:
                 # Connection failures imply that our metadata is stale, so
@@ -465,10 +479,10 @@ class AIOKafkaClient:
             request (Struct): request object (not-encoded)
 
         Raises:
-            kafka.common.RequestTimedOutError
-            kafka.common.NodeNotReadyError
-            kafka.common.ConnectionError
-            kafka.common.CorrelationIdError
+            kafka.errors.RequestTimedOutError
+            kafka.errors.NodeNotReadyError
+            kafka.errors.KafkaConnectionError
+            kafka.errors.CorrelationIdError
 
         Returns:
             Future: resolves to Response struct
@@ -522,14 +536,14 @@ class AIOKafkaClient:
             ((0, 8, 0), MetadataRequest_v0([])),
         ]
 
-        # kafka kills the connection when it doesnt recognize an API request
+        # kafka kills the connection when it does not recognize an API request
         # so we can send a test request and then follow immediately with a
         # vanilla MetadataRequest. If the server did not recognize the first
         # request, both will be failed with a ConnectionError that wraps
         # socket.error (32, 54, or 104)
         conn = await self._get_conn(node_id, no_hint=True)
         if conn is None:
-            raise ConnectionError(
+            raise KafkaConnectionError(
                 "No connection to node with id {}".format(node_id))
         for version, request in test_cases:
             try:
@@ -565,7 +579,8 @@ class AIOKafkaClient:
         # The logic here is to check the list of supported request versions
         # in descending order. As soon as we find one that works, return it
         test_cases = [
-            # format (<broker verion>, <needed struct>)
+            # format (<broker version>, <needed struct>)
+            ((2, 3, 0), FetchRequest[0].API_KEY, 11),
             ((2, 1, 0), MetadataRequest[0].API_KEY, 7),
             ((1, 1, 0), FetchRequest[0].API_KEY, 7),
             ((1, 0, 0), MetadataRequest[0].API_KEY, 5),

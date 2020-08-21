@@ -1,4 +1,4 @@
-__version__ = '1.1.6'  # noqa
+__version__ = '1.1.6ec46014'  # noqa
 
 from .abc import ConsumerRebalanceListener
 from .client import AIOKafkaClient
@@ -16,6 +16,8 @@ __robinhood__ = True
 
 __all__ = [
     # Clients API
+    'BaseProducer',
+    'MultiTXNProducer',
     "AIOKafkaProducer",
     "AIOKafkaConsumer",
     # ABC's

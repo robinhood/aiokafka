@@ -1,10 +1,14 @@
 import asyncio
 import collections
+import base64
 import functools
+import hashlib
+import hmac
 import logging
 import struct
 import sys
 import traceback
+import uuid
 import warnings
 import weakref
 
@@ -17,6 +21,8 @@ from kafka.protocol.commit import (
 
 import aiokafka.errors as Errors
 from aiokafka.util import ensure_future, create_future, PY_36
+
+from aiokafka.abc import AbstractTokenProvider
 
 try:
     import gssapi
@@ -71,6 +77,7 @@ async def create_conn(
     sasl_plain_password=None,
     sasl_kerberos_service_name='kafka',
     sasl_kerberos_domain_name=None,
+    sasl_oauth_token_provider=None,
     version_hint=None
 ):
     if loop is None:
@@ -86,6 +93,7 @@ async def create_conn(
         sasl_plain_password=sasl_plain_password,
         sasl_kerberos_service_name=sasl_kerberos_service_name,
         sasl_kerberos_domain_name=sasl_kerberos_domain_name,
+        sasl_oauth_token_provider=sasl_oauth_token_provider,
         version_hint=version_hint)
     await conn.connect()
     return conn
@@ -118,9 +126,22 @@ class AIOKafkaConnection:
                  sasl_plain_password=None, sasl_plain_username=None,
                  sasl_kerberos_service_name='kafka',
                  sasl_kerberos_domain_name=None,
+                 sasl_oauth_token_provider=None,
                  version_hint=None):
         if sasl_mechanism == "GSSAPI":
             assert gssapi is not None, "gssapi library required"
+
+        if sasl_mechanism == "OAUTHBEARER":
+            if sasl_oauth_token_provider is None or \
+                    not isinstance(
+                        sasl_oauth_token_provider, AbstractTokenProvider):
+                raise ValueError("sasl_oauth_token_provider needs to be \
+                    provided implementing aiokafka.abc.AbstractTokenProvider")
+            assert callable(
+                getattr(sasl_oauth_token_provider, "token", None)
+                ), (
+                'sasl_oauth_token_provider must implement method #token()'
+                )
 
         self._loop = loop
         self._host = host
@@ -135,6 +156,7 @@ class AIOKafkaConnection:
         self._sasl_plain_password = sasl_plain_password
         self._sasl_kerberos_service_name = sasl_kerberos_service_name
         self._sasl_kerberos_domain_name = sasl_kerberos_domain_name
+        self._sasl_oauth_token_provider = sasl_oauth_token_provider
 
         # Version hint is the version determined by initial client bootstrap
         self._version_hint = version_hint
@@ -157,7 +179,7 @@ class AIOKafkaConnection:
         if loop.get_debug():
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
 
-    # Warn and try to close. We can close synchroniously, so will attempt
+    # Warn and try to close. We can close synchronously, so will attempt
     # that
     def __del__(self, _warnings=warnings):
         if self.connected():
@@ -257,7 +279,9 @@ class AIOKafkaConnection:
                 self.close(reason=CloseReason.AUTH_FAILURE, exc=exc)
                 raise exc
 
-        assert self._sasl_mechanism in ('PLAIN', 'GSSAPI')
+        assert self._sasl_mechanism in (
+            'PLAIN', 'GSSAPI', 'SCRAM-SHA-256', 'SCRAM-SHA-512', 'OAUTHBEARER'
+        )
         if self._security_protocol == 'SASL_PLAINTEXT' and \
            self._sasl_mechanism == 'PLAIN':
             self.log.warning(
@@ -265,6 +289,10 @@ class AIOKafkaConnection:
 
         if self._sasl_mechanism == 'GSSAPI':
             authenticator = self.authenticator_gssapi()
+        elif self._sasl_mechanism.startswith('SCRAM-SHA-'):
+            authenticator = self.authenticator_scram()
+        elif self._sasl_mechanism == 'OAUTHBEARER':
+            authenticator = self.authenticator_oauth()
         else:
             authenticator = self.authenticator_plain()
 
@@ -304,6 +332,10 @@ class AIOKafkaConnection:
             self.log.info(
                 'Authenticated as %s via GSSAPI',
                 self.sasl_principal)
+        elif self._sasl_mechanism == 'OAUTHBEARER':
+            self.log.info(
+                'Authenticated via OAUTHBEARER'
+            )
         else:
             self.log.info('Authenticated as %s via PLAIN',
                           self._sasl_plain_username)
@@ -318,6 +350,17 @@ class AIOKafkaConnection:
         return SaslGSSAPIAuthenticator(
             loop=self._loop,
             principal=self.sasl_principal)
+
+    def authenticator_scram(self):
+        return ScramAuthenticator(
+            loop=self._loop,
+            sasl_plain_password=self._sasl_plain_password,
+            sasl_plain_username=self._sasl_plain_username,
+            sasl_mechanism=self._sasl_mechanism)
+
+    def authenticator_oauth(self):
+        return OAuthAuthenticator(
+            sasl_oauth_token_provider=self._sasl_oauth_token_provider)
 
     @property
     def sasl_principal(self):
@@ -373,7 +416,7 @@ class AIOKafkaConnection:
 
     def send(self, request, expect_response=True):
         if self._writer is None:
-            raise Errors.ConnectionError(
+            raise Errors.KafkaConnectionError(
                 "No connection to broker at {0}:{1}"
                 .format(self._host, self._port))
 
@@ -387,7 +430,7 @@ class AIOKafkaConnection:
             self._writer.write(size + message)
         except OSError as err:
             self.close(reason=CloseReason.CONNECTION_BROKEN)
-            raise Errors.ConnectionError(
+            raise Errors.KafkaConnectionError(
                 "Connection at {0}:{1} broken: {2}".format(
                     self._host, self._port, err))
 
@@ -402,7 +445,7 @@ class AIOKafkaConnection:
 
     def _send_sasl_token(self, payload, expect_response=True):
         if self._writer is None:
-            raise Errors.ConnectionError(
+            raise Errors.KafkaConnectionError(
                 "No connection to broker at {0}:{1}"
                 .format(self._host, self._port))
 
@@ -411,7 +454,7 @@ class AIOKafkaConnection:
             self._writer.write(size + payload)
         except OSError as err:
             self.close(reason=CloseReason.CONNECTION_BROKEN)
-            raise Errors.ConnectionError(
+            raise Errors.KafkaConnectionError(
                 "Connection at {0}:{1} broken: {2}".format(
                     self._host, self._port, err))
 
@@ -435,7 +478,7 @@ class AIOKafkaConnection:
                 self._read_task = None
             for _, _, fut in self._requests:
                 if not fut.done():
-                    error = Errors.ConnectionError(
+                    error = Errors.KafkaConnectionError(
                         "Connection at {0}:{1} closed".format(
                             self._host, self._port))
                     if exc is not None:
@@ -593,3 +636,125 @@ class SaslGSSAPIAuthenticator(BaseSaslAuthenticator):
         msg = client_ctx.wrap(msg + self._principal.encode(), False).message
 
         yield (msg, False)
+
+
+class ScramAuthenticator(BaseSaslAuthenticator):
+    MECHANISMS = {
+        'SCRAM-SHA-256': hashlib.sha256,
+        'SCRAM-SHA-512': hashlib.sha512
+    }
+
+    def __init__(self, *, loop, sasl_plain_password,
+                 sasl_plain_username, sasl_mechanism):
+        self._loop = loop
+        self._nonce = str(uuid.uuid4()).replace('-', '')
+        self._auth_message = ''
+        self._salted_password = None
+        self._sasl_plain_username = sasl_plain_username
+        self._sasl_plain_password = sasl_plain_password.encode('utf-8')
+        self._hashfunc = self.MECHANISMS[sasl_mechanism]
+        self._hashname = ''.join(sasl_mechanism.lower().split('-')[1:3])
+        self._stored_key = None
+        self._client_key = None
+        self._client_signature = None
+        self._client_proof = None
+        self._server_key = None
+        self._server_signature = None
+        self._authenticator = self.authenticator_scram()
+
+    def first_message(self):
+        client_first_bare = 'n={},r={}'.format(
+            self._sasl_plain_username, self._nonce)
+        self._auth_message += client_first_bare
+        return 'n,,' + client_first_bare
+
+    def process_server_first_message(self, server_first):
+        self._auth_message += ',' + server_first
+        params = dict(pair.split('=', 1) for pair in server_first.split(','))
+        server_nonce = params['r']
+        if not server_nonce.startswith(self._nonce):
+            raise ValueError("Server nonce, did not start with client nonce!")
+        self._nonce = server_nonce
+        self._auth_message += ',c=biws,r=' + self._nonce
+
+        salt = base64.b64decode(params['s'].encode('utf-8'))
+        iterations = int(params['i'])
+        self.create_salted_password(salt, iterations)
+
+        self._client_key = self.hmac(self._salted_password, b'Client Key')
+        self._stored_key = self._hashfunc(self._client_key).digest()
+        self._client_signature = self.hmac(
+            self._stored_key, self._auth_message.encode('utf-8'))
+        self._client_proof = ScramAuthenticator._xor_bytes(
+            self._client_key, self._client_signature)
+        self._server_key = self.hmac(self._salted_password, b'Server Key')
+        self._server_signature = self.hmac(
+            self._server_key, self._auth_message.encode('utf-8'))
+
+    def final_message(self):
+        return 'c=biws,r={},p={}'.format(
+            self._nonce, base64.b64encode(self._client_proof).decode('utf-8'))
+
+    def process_server_final_message(self, server_final):
+        params = dict(pair.split('=', 1) for pair in server_final.split(','))
+        if self._server_signature != base64.b64decode(
+                params['v'].encode('utf-8')):
+            raise ValueError("Server sent wrong signature!")
+
+    def authenticator_scram(self):
+        client_first = self.first_message().encode('utf-8')
+        server_first = yield client_first, True
+        self.process_server_first_message(server_first.decode('utf-8'))
+        client_final = self.final_message().encode('utf-8')
+        server_final = yield client_final, True
+        self.process_server_final_message(server_final.decode('utf-8'))
+
+    def hmac(self, key, msg):
+        return hmac.new(key, msg, digestmod=self._hashfunc).digest()
+
+    def create_salted_password(self, salt, iterations):
+        self._salted_password = hashlib.pbkdf2_hmac(
+            self._hashname, self._sasl_plain_password, salt, iterations
+        )
+
+    @staticmethod
+    def _xor_bytes(left, right):
+        return bytes(lb ^ rb for lb, rb in zip(left, right))
+
+
+class OAuthAuthenticator(BaseSaslAuthenticator):
+    def __init__(self, *, sasl_oauth_token_provider):
+        self._sasl_oauth_token_provider = sasl_oauth_token_provider
+        self._token_sent = False
+
+    async def step(self, payload):
+        if self._token_sent:
+            return
+        token = await self._sasl_oauth_token_provider.token()
+        token_extensions = self._token_extensions()
+        self._token_sent = True
+        return self._build_oauth_client_request(token, token_extensions)\
+            .encode("utf-8"), True
+
+    def _build_oauth_client_request(self, token, token_extensions):
+        return "n,,\x01auth=Bearer {}{}\x01\x01".format(
+            token, token_extensions
+            )
+
+    def _token_extensions(self):
+        """
+        Return a string representation of the OPTIONAL key-value pairs
+        that can be sent with an OAUTHBEARER initial request.
+        """
+        # Only run if the #extensions() method is implemented
+        # by the clients Token Provider class
+        # Builds up a string separated by \x01 via a dict of key value pairs
+        if callable(
+                getattr(self._sasl_oauth_token_provider, "extensions", None)):
+            extensions = self._sasl_oauth_token_provider.extensions()
+            if len(extensions) > 0:
+                msg = "\x01".join(
+                    ["{}={}".format(k, v) for k, v in extensions.items()])
+                return "\x01" + msg
+
+        return ""

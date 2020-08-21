@@ -15,7 +15,7 @@ from aiokafka.errors import (
 from aiokafka.record.legacy_records import LegacyRecordBatchBuilder
 from aiokafka.structs import TopicPartition
 from aiokafka.util import (
-    INTEGER_MAX_VALUE, PY_36, commit_structure_validate,
+    INTEGER_MAX_VALUE, PY_36, commit_structure_validate, get_running_loop
 )
 
 from .message_accumulator import MessageAccumulator
@@ -40,7 +40,7 @@ class BaseProducer(abc.ABC):
     _closed = None  # Serves as an uninitialized flag for __del__
     _source_traceback = None
 
-    def __init__(self, *, loop, bootstrap_servers='localhost',
+    def __init__(self, *, loop=None, bootstrap_servers='localhost',
                  client_id=None,
                  metadata_max_age_ms=300000, request_timeout_ms=40000,
                  api_version='auto', acks=_missing,
@@ -55,7 +55,11 @@ class BaseProducer(abc.ABC):
                  transaction_timeout_ms=60000, sasl_mechanism="PLAIN",
                  sasl_plain_password=None, sasl_plain_username=None,
                  sasl_kerberos_service_name='kafka',
-                 sasl_kerberos_domain_name=None):
+                 sasl_kerberos_domain_name=None,
+                 sasl_oauth_token_provider=None):
+        if loop is None:
+            loop = get_running_loop()
+
         if acks not in (0, 1, -1, 'all', _missing):
             raise ValueError("Invalid ACKS parameter")
         if compression_type not in ('gzip', 'snappy', 'lz4', None):
@@ -117,7 +121,8 @@ class BaseProducer(abc.ABC):
             sasl_plain_username=sasl_plain_username,
             sasl_plain_password=sasl_plain_password,
             sasl_kerberos_service_name=sasl_kerberos_service_name,
-            sasl_kerberos_domain_name=sasl_kerberos_domain_name)
+            sasl_kerberos_domain_name=sasl_kerberos_domain_name,
+            sasl_oauth_token_provider=sasl_oauth_token_provider)
         self._metadata = self.client.cluster
         self._loop = loop
         if loop.get_debug():
@@ -321,11 +326,13 @@ class BaseProducer(abc.ABC):
             timestamp_ms=timestamp_ms, headers=headers)
         return fut
 
-    async def send_and_wait(self, topic, value=None, key=None, partition=None,
-                      timestamp_ms=None):
+    async def send_and_wait(
+        self, topic, value=None, key=None, partition=None,
+        timestamp_ms=None, headers=None
+    ):
         """Publish a message to a topic and wait the result"""
         future = await self.send(
-            topic, value, key, partition, timestamp_ms)
+            topic, value, key, partition, timestamp_ms, headers)
         return (await future)
 
 
@@ -457,6 +464,9 @@ class AIOKafkaProducer(BaseProducer):
         sasl_plain_username (str): username for sasl PLAIN authentication.
             Default: None
         sasl_plain_password (str): password for sasl PLAIN authentication.
+            Default: None
+        sasl_oauth_token_provider (kafka.oauth.abstract.AbstractTokenProvider):
+            OAuthBearer token provider instance. (See kafka.oauth.abstract).
             Default: None
 
     Note:

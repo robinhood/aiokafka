@@ -29,7 +29,6 @@ class BrokerIndex:
                            (0, random.randint(1, 100), broker.nodeId))
 
 
-
 class ClusterMetadata(BaseClusterMetadata):
 
     def __init__(self, *args, **kw):
@@ -125,7 +124,6 @@ class ClusterMetadata(BaseClusterMetadata):
             else:
                 log.error("Error fetching metadata for topic %s: %s",
                           topic, error_type)
-
 
         with self._lock:
             self._brokers = _new_brokers

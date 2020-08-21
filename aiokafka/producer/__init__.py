@@ -1,3 +1,3 @@
 from .producer import AIOKafkaProducer, BaseProducer, MultiTXNProducer
 
-__all__ = ["AIOKafkaProducer"]
+__all__ = ["AIOKafkaProducer", 'BaseProducer', 'MultiTXNProducer']

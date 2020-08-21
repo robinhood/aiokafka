@@ -68,7 +68,7 @@ from kafka.errors import (
 
     KafkaUnavailableError,
     KafkaTimeoutError,
-    ConnectionError,
+    KafkaConnectionError,
 )
 
 __all__ = [
@@ -143,7 +143,7 @@ __all__ = [
 
     "KafkaUnavailableError",
     "KafkaTimeoutError",
-    "ConnectionError",
+    "KafkaConnectionError",
 ]
 
 
@@ -191,16 +191,17 @@ class ProducerClosed(KafkaError):
 
 
 class ProducerFenced(KafkaError):
-    """ Another producer with the same tranactional ID went online.
-        NOTE: As it seems this will be raised b y Broker if transaction
-        timeout occurred also.
+    """ Another producer with the same transactional ID went online.
+        NOTE: As it seems this will be raised by Broker if transaction timeout
+            occurred also.
     """
 
     def __init__(
-            self,
-            msg="There is a newer producer using the same transactional_id "
-                "or transaction timeout occurred (check that processing "
-                "time is below transaction_timeout_ms)"):
+        self,
+        msg="There is a newer producer using the same transactional_id or"
+            "transaction timeout occurred (check that processing time is "
+            "below transaction_timeout_ms)"
+    ):
         super().__init__(msg)
 
 

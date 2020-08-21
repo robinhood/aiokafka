@@ -230,7 +230,8 @@ class PartitionRecords:
                     log.debug(
                         "Skipping aborted record batch from partition %s with"
                         " producer_id %s and offsets %s to %s",
-                        tp, next_batch.producer_id
+                        tp, next_batch.producer_id,
+                        next_batch.base_offset, next_batch.next_offset - 1
                     )
                     self.next_fetch_offset = next_batch.next_offset
                     continue
@@ -686,6 +687,11 @@ class Fetcher:
                 " fetch")
             return False
 
+        fetch_offsets = {}
+        for topic, partitions in request.topics:
+            for partition, offset, _ in partitions:
+                fetch_offsets[TopicPartition(topic, partition)] = offset
+
         now_ms = int(1000 * time.time())
         for topic, partitions in response.topics:
             for partition, error_code, highwater, *part_data in partitions:
@@ -706,7 +712,7 @@ class Fetcher:
                     tp_state.lso = lso
                     tp_state.timestamp = now_ms
                     if not tp_state.has_valid_position or \
-                            tp_state.position != fetch_offset :
+                            tp_state.position != fetch_offset:
                         log.debug(
                             "Discarding fetch response for partition %s "
                             "since its offset %s does not match the current "
@@ -866,7 +872,8 @@ class Fetcher:
         Arguments:
             timestamps: {TopicPartition: int} dict with timestamps to fetch
                 offsets by. -1 for the latest available, -2 for the earliest
-                available. Otherwise timestamp is treated as epoch miliseconds.
+                available. Otherwise timestamp is treated as epoch
+                milliseconds.
 
         Returns:
             {TopicPartition: (int, int)}: Mapping of partition to
@@ -1109,10 +1116,13 @@ class Fetcher:
                 return drained
 
             waiter = self._create_fetch_waiter()
-            done, _ = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 [waiter], timeout=timeout, loop=self._loop)
 
             if not done or self._closed:
+                if pending:
+                    fut = pending.pop()
+                    fut.cancel()
                 return {}
 
             if waiter.done():
