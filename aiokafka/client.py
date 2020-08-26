@@ -396,10 +396,10 @@ class AIOKafkaClient:
         try:
             if group == ConnectionGroup.DEFAULT:
                 broker = self.cluster.broker_metadata(node_id)
-                # XXX: earlier we only did an assert here, but it seems it's
-                # possible to get a leader that is for some reason not in
-                # metadata.
-                # I think requerying metadata should solve this problem
+                if broker is None:
+                    self.force_metadata_update()
+                    broker = self.cluster.broker_metadata(node_id)
+
                 if broker is None:
                     raise StaleMetadata(
                         'Broker id %s not in current metadata' % node_id)
