@@ -382,6 +382,20 @@ class AIOKafkaClient:
                 reason == CloseReason.CONNECTION_TIMEOUT:
             self.force_metadata_update()
 
+    def _get_broker(self, node_id):
+        broker = self.cluster.broker_metadata(node_id)
+        if broker is None:
+            self.force_metadata_update()
+            broker = self.cluster.broker_metadata(node_id)
+        return broker
+
+    def _get_coordinator(self, node_id):
+        coordinator = self.cluster.coordinator_metadata(node_id)
+        if coordinator is None:
+            self.force_metadata_update()
+            coordinator = self.cluster.coordinator_metadata(node_id)
+        return coordinator
+
     async def _get_conn(
         self, node_id, *, group=ConnectionGroup.DEFAULT,
         no_hint=False
@@ -397,24 +411,16 @@ class AIOKafkaClient:
 
         try:
             if group == ConnectionGroup.DEFAULT:
-                broker = self.cluster.broker_metadata(node_id)
-                # XXX: earlier we only did an assert here, but it seems it's
-                # possible to get a leader that is for some reason not in
-                # metadata.
-                # I think requerying metadata should solve this problem
+                broker = self._get_broker(node_id)
                 if broker is None:
                     raise StaleMetadata(
                         'Broker id %s not in current metadata' % node_id)
             else:
-                broker = self.cluster.coordinator_metadata(node_id)
-                # XXX: earlier we only did an assert here, but it seems it's
-                # possible to get a leader that is for some reason not in
-                # metadata.
-                # I think requerying metadata should solve this problem
-                if broker is None :
+                broker = self._get_coordinator(node_id)
+                if broker is None:
                     raise StaleMetadata(
                         'Broker id %s not in current metadata' % node_id)
-                
+
             log.debug("Initiating connection to node %s at %s:%s",
                       node_id, broker.host, broker.port)
 
