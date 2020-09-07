@@ -412,6 +412,15 @@ class ListenerNotFound(BrokerResponseError):
     )
 
 
+class MemberIdRequired(BrokerResponseError):
+    errno = 79
+    message = 'MEMBER_ID_REQUIRED'
+    description = (
+        'Consumer needs to have a valid member '
+        'id before actually entering group'
+    )
+
+
 def _iter_broker_errors():
     for name, obj in inspect.getmembers(sys.modules[__name__]):
         if inspect.isclass(obj) and issubclass(obj, BrokerResponseError) and \
