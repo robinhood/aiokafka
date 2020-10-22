@@ -285,7 +285,14 @@ class AIOKafkaClient:
             nodeids.append('bootstrap')
         random.shuffle(nodeids)
         for node_id in nodeids:
-            conn = await self._get_conn(node_id)
+            try:
+                conn = await self._get_conn(node_id)
+            except StaleMetadata:
+                # Metadata are stale, ignore this node.
+                # Can't update metadata cause _get_conn on this node raise stalemetadata so update metadata
+                # which can't be done cause _get_conn will raise StaleMetadata and so on.
+                # So we break the circle here and skip this node, and try another one.
+                conn = None
 
             if conn is None:
                 continue
