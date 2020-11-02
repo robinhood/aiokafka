@@ -419,9 +419,11 @@ class GroupCoordinator(BaseCoordinator):
         return task
 
     async def _maybe_leave_group(self):
-        if self.generation > 0:
+        if self.generation > 0 and self._group_instance_id is None:
             # this is a minimal effort attempt to leave the group. we do not
             # attempt any resending if the request fails or times out.
+            # Note: do not send this leave request if we are running in static
+            # partition assignment mode (when group_instance_id has been set).
             version = 0 if self._client.api_version < (0, 11, 0) else 1
             request = LeaveGroupRequest[version](self.group_id, self.member_id)
             try:
