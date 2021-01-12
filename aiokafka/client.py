@@ -15,7 +15,7 @@ from aiokafka.protocol.coordination import FindCoordinatorRequest
 from aiokafka.protocol.produce import ProduceRequest
 from aiokafka.errors import (
     KafkaError,
-    ConnectionError,
+    KafkaConnectionError,
     NodeNotReadyError,
     RequestTimedOutError,
     UnknownTopicOrPartitionError,
@@ -222,7 +222,7 @@ class AIOKafkaClient:
             log.debug('Received cluster metadata: %s', self.cluster)
             break
         else:
-            raise ConnectionError(
+            raise KafkaConnectionError(
                 'Unable to bootstrap from {}'.format(self.hosts))
 
         # detect api version if need
@@ -459,7 +459,7 @@ class AIOKafkaClient:
         Raises:
             kafka.common.RequestTimedOutError
             kafka.common.NodeNotReadyError
-            kafka.common.ConnectionError
+            kafka.common.KafkaConnectionError
             kafka.common.CorrelationIdError
 
         Returns:
@@ -517,11 +517,11 @@ class AIOKafkaClient:
         # kafka kills the connection when it doesnt recognize an API request
         # so we can send a test request and then follow immediately with a
         # vanilla MetadataRequest. If the server did not recognize the first
-        # request, both will be failed with a ConnectionError that wraps
+        # request, both will be failed with a KafkaConnectionError that wraps
         # socket.error (32, 54, or 104)
         conn = await self._get_conn(node_id, no_hint=True)
         if conn is None:
-            raise ConnectionError(
+            raise KafkaConnectionError(
                 "No connection to node with id {}".format(node_id))
         for version, request in test_cases:
             try:
